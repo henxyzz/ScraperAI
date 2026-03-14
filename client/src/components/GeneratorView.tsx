@@ -1,11 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Globe, Zap, Code2, CheckCircle, ArrowRight, ArrowLeft,
   RefreshCw, Wand2, Package, Shield, ShieldOff,
   Terminal, Play, Box, Cpu, Route, CheckSquare, Square, Settings2,
+  ChevronDown, ChevronUp, Activity,
 } from "lucide-react";
 import { useStore } from "../store";
-import { analyzeUrl, generateScraper, getTemplates, installDeps, getApiRoutes, createApiRoute, deleteApiRoute } from "../api";
+import { generateScraper, getTemplates, installDeps, getApiRoutes, createApiRoute, deleteApiRoute } from "../api";
 import { FirewallInfo } from "./FirewallInfo";
 import { TryOutputPanel } from "./TryOutputPanel";
 import { CodeBlock } from "./CodeBlock";
@@ -46,16 +47,61 @@ export function GeneratorView() {
 
   const canProceed = !!apiKey.trim();
 
-  /* ── Step 0: Analyze ── */
+  // ── SSE log state ─────────────────────────────────────────
+  const [logs,        setLogs]        = useState<string[]>([]);
+  const [showLogs,    setShowLogs]    = useState(false);
+  const [genLogs,     setGenLogs]     = useState<string[]>([]);
+  const [showGenLogs, setShowGenLogs] = useState(false);
+  const logRef    = useRef<HTMLDivElement>(null);
+  const genLogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [logs]);
+  useEffect(() => { if (genLogRef.current) genLogRef.current.scrollTop = genLogRef.current.scrollHeight; }, [genLogs]);
+
+  /* ── Step 0: Analyze via SSE stream ── */
   const handleAnalyze = async () => {
     if (!genUrl.trim()) { addToast("warn","Masukkan URL target terlebih dahulu"); return; }
     if (!canProceed)    { addToast("warn","Masukkan API Key di topbar terlebih dahulu"); return; }
     setLoadingAnalyze(true); setCheckedFields({});
-    try {
-      const res = await analyzeUrl(genUrl.trim(), provider, apiKey, model||undefined);
-      setGenAnalysis(res); setGenBypassCF(res.firewall.bypass_recommended); setGenStep(1);
-    } catch(e:any){ addToast("error", e.message||"Gagal analisa URL"); }
-    finally { setLoadingAnalyze(false); }
+    setLogs([]); setShowLogs(true);
+
+    const params = new URLSearchParams({ url: genUrl.trim(), provider, apiKey, model: model || "" });
+    const evtSrc = new EventSource(`/api/analyze/stream?${params.toString()}`);
+
+    evtSrc.addEventListener("log", (e) => {
+      const d = JSON.parse(e.data);
+      setLogs(p => [...p, d.msg]);
+    });
+
+    evtSrc.addEventListener("result", (e) => {
+      evtSrc.close();
+      try {
+        const data = JSON.parse(e.data);
+        setGenAnalysis(data);
+        setGenBypassCF(data.firewall?.bypass_recommended || false);
+        setGenStep(1);
+        addToast("success", "Analisa selesai!");
+      } catch { addToast("error", "Gagal parse hasil analisa"); }
+      setLoadingAnalyze(false);
+    });
+
+    evtSrc.addEventListener("error", (e) => {
+      evtSrc.close();
+      try {
+        const d = JSON.parse((e as any).data || "{}");
+        addToast("error", d.msg || "Gagal analisa URL");
+        setLogs(p => [...p, `❌ Error: ${d.msg}`]);
+      } catch {
+        addToast("error", "Koneksi SSE terputus");
+      }
+      setLoadingAnalyze(false);
+    });
+
+    evtSrc.onerror = () => {
+      evtSrc.close();
+      addToast("error", "Koneksi SSE error");
+      setLoadingAnalyze(false);
+    };
   };
 
   const loadTemplates = async () => {
@@ -86,22 +132,49 @@ export function GeneratorView() {
     setGenStep(2);
   };
 
-  /* ── Step 2: Generate ── */
+  /* ── Step 2: Generate via SSE stream ── */
   const handleGenerate = async () => {
     if (!genTarget.trim()) { addToast("warn","Target data belum diisi"); return; }
     if (!canProceed)       { addToast("warn","API Key belum diisi"); return; }
     setLoadingGenerate(true);
-    try {
-      const res = await generateScraper({
-        url:genUrl, target:genTarget, lang:genLang,
-        bypassCF:genBypassCF, provider, apiKey, model:model||undefined,
-        moduleType: genLang==="nodejs" ? moduleType : undefined,
-      } as any);
-      setGenResult({ id:res.id, code:res.code, trySchema:res.trySchema });
-      setGenStep(3);
-      addToast("success","Scraper berhasil di-generate!");
-    } catch(e:any){ addToast("error",e.message||"Gagal generate scraper"); }
-    finally { setLoadingGenerate(false); }
+    setGenLogs([]); setShowGenLogs(true);
+
+    const params = new URLSearchParams({
+      url: genUrl, target: genTarget, lang: genLang,
+      bypassCF: String(genBypassCF), provider, apiKey, model: model || "",
+      moduleType: genLang === "nodejs" ? moduleType : "",
+    });
+    const evtSrc = new EventSource(`/api/generate/stream?${params.toString()}`);
+
+    evtSrc.addEventListener("log", (e) => {
+      const d = JSON.parse(e.data);
+      setGenLogs(p => [...p, d.msg]);
+    });
+
+    evtSrc.addEventListener("result", (e) => {
+      evtSrc.close();
+      try {
+        const data = JSON.parse(e.data);
+        setGenResult({ id: data.id, code: data.code, trySchema: data.trySchema });
+        setGenStep(3);
+        addToast("success", "Scraper berhasil di-generate!");
+      } catch { addToast("error", "Gagal parse kode yang di-generate"); }
+      setLoadingGenerate(false);
+    });
+
+    evtSrc.addEventListener("error", (e) => {
+      evtSrc.close();
+      try {
+        const d = JSON.parse((e as any).data || "{}");
+        addToast("error", d.msg || "Gagal generate scraper");
+        setGenLogs(p => [...p, `❌ Error: ${d.msg}`]);
+      } catch {
+        addToast("error", "Koneksi SSE error saat generate");
+      }
+      setLoadingGenerate(false);
+    });
+
+    evtSrc.onerror = () => { evtSrc.close(); setLoadingGenerate(false); };
   };
 
   /* ── Auto Install ── */
@@ -163,6 +236,47 @@ export function GeneratorView() {
               </div>
               {!canProceed && (
                 <div className="info-box warn"><Shield size={15}/><span>Masukkan API Key di topbar terlebih dahulu.</span></div>
+              )}
+
+              {/* ── Real-time Log Panel ── */}
+              {logs.length > 0 && (
+                <div style={{background:"rgba(0,0,0,.5)",border:"1px solid var(--border2)",borderRadius:10,overflow:"hidden"}}>
+                  <button
+                    onClick={()=>setShowLogs(p=>!p)}
+                    style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"9px 14px",
+                      background:"transparent",border:"none",cursor:"pointer",color:"var(--muted)",
+                      fontFamily:"var(--mono)",fontSize:11,textAlign:"left"}}
+                  >
+                    <Activity size={12} style={{color:loadingAnalyze?"var(--neon)":"var(--muted)"}}/>
+                    <span style={{flex:1}}>
+                      {loadingAnalyze ? "⏳ Proses berjalan..." : "✅ Selesai"} — {logs.length} log
+                    </span>
+                    {showLogs ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+                  </button>
+                  {showLogs && (
+                    <div ref={logRef} style={{
+                      padding:"10px 14px",maxHeight:220,overflowY:"auto",
+                      display:"flex",flexDirection:"column",gap:3,
+                    }}>
+                      {logs.map((msg,i)=>(
+                        <div key={i} style={{
+                          fontFamily:"var(--mono)",fontSize:11,lineHeight:1.6,
+                          color: msg.startsWith("✅")?"var(--neon)"
+                               : msg.startsWith("❌")?"var(--danger)"
+                               : msg.startsWith("⚠️")?"var(--warn)"
+                               : msg.startsWith("🔵")?"var(--neon2)"
+                               : "var(--text2)",
+                        }}>{msg}</div>
+                      ))}
+                      {loadingAnalyze && (
+                        <div style={{display:"flex",gap:6,alignItems:"center",marginTop:4}}>
+                          <div className="spinner" style={{width:10,height:10,borderWidth:"1.5px"}}/>
+                          <span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)"}}>memproses...</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -456,6 +570,47 @@ export function GeneratorView() {
             <div className="info-box info">
               <div className="spinner" style={{width:13,height:13,borderWidth:"1.5px",flexShrink:0}}/>
               <span>AI sedang menulis kode scraper. Bisa 30–90 detik...</span>
+            </div>
+          )}
+          {/* ── Generate Real-time Log Panel ── */}
+          {genLogs.length > 0 && (
+            <div style={{background:"rgba(0,0,0,.5)",border:"1px solid var(--border2)",borderRadius:10,overflow:"hidden"}}>
+              <button
+                onClick={()=>setShowGenLogs(p=>!p)}
+                style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"9px 14px",
+                  background:"transparent",border:"none",cursor:"pointer",color:"var(--muted)",
+                  fontFamily:"var(--mono)",fontSize:11,textAlign:"left"}}
+              >
+                <Activity size={12} style={{color:loadingGenerate?"var(--neon)":"var(--muted)"}}/>
+                <span style={{flex:1}}>
+                  {loadingGenerate ? "⏳ AI sedang generate..." : "✅ Generate selesai"} — {genLogs.length} log
+                </span>
+                {showGenLogs ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+              </button>
+              {showGenLogs && (
+                <div ref={genLogRef} style={{
+                  padding:"10px 14px",maxHeight:250,overflowY:"auto",
+                  display:"flex",flexDirection:"column",gap:3,
+                }}>
+                  {genLogs.map((msg,i)=>(
+                    <div key={i} style={{
+                      fontFamily:"var(--mono)",fontSize:11,lineHeight:1.6,
+                      color: msg.startsWith("✅")?"var(--neon)"
+                           : msg.startsWith("❌")?"var(--danger)"
+                           : msg.startsWith("⚠️")?"var(--warn)"
+                           : msg.startsWith("🎉")?"var(--neon)"
+                           : msg.startsWith("🤖")||msg.startsWith("🚀")||msg.startsWith("🌐")||msg.startsWith("🎯")?"var(--neon2)"
+                           : "var(--text2)",
+                    }}>{msg}</div>
+                  ))}
+                  {loadingGenerate && (
+                    <div style={{display:"flex",gap:6,alignItems:"center",marginTop:4}}>
+                      <div className="spinner" style={{width:10,height:10,borderWidth:"1.5px"}}/>
+                      <span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)"}}>AI sedang menulis kode...</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

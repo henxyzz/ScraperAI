@@ -617,152 +617,350 @@ app.post("/api/validate", async (req, res) => {
   }
 });
 
-// ── POST /api/analyze ─────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════
-//  HTML FETCHER + STRUCTURAL ANALYZER untuk /api/analyze
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+//  SMART BYPASS FETCHER — Multi-layer fallback untuk bypass firewall
+//  Layer 1: axios biasa
+//  Layer 2: Rotate User-Agent + fake browser headers
+//  Layer 3: Google AMP / cached version
+//  Layer 4: Wayback Machine snapshot
+//  Layer 5: Axios dengan Cookie + Referrer bypass
+// ═══════════════════════════════════════════════════════════════
 
-const FETCH_HEADERS_ANALYZE = {
-  "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-  "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-  "Accept-Encoding": "gzip, deflate, br",
-  "Cache-Control":   "no-cache",
-  "Sec-Fetch-Dest":  "document",
-  "Sec-Fetch-Mode":  "navigate",
-  "Sec-Fetch-Site":  "none",
-  "Upgrade-Insecure-Requests": "1",
-};
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+];
 
-async function fetchAndExtractHtml(url) {
+function randomUA() { return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]; }
+function sleep(ms)   { return new Promise(r => setTimeout(r, ms)); }
+
+function buildHeaders(extra = {}) {
+  return {
+    "User-Agent":                randomUA(),
+    "Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language":           "en-US,en;q=0.9,id;q=0.8",
+    "Accept-Encoding":           "gzip, deflate, br",
+    "Cache-Control":             "no-cache",
+    "Pragma":                    "no-cache",
+    "Sec-Ch-Ua":                 '"Chromium";v="124", "Google Chrome";v="124"',
+    "Sec-Ch-Ua-Mobile":          "?0",
+    "Sec-Ch-Ua-Platform":        '"Windows"',
+    "Sec-Fetch-Dest":            "document",
+    "Sec-Fetch-Mode":            "navigate",
+    "Sec-Fetch-Site":            "none",
+    "Sec-Fetch-User":            "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "Connection":                "keep-alive",
+    ...extra,
+  };
+}
+
+/**
+ * fetchWithBypass — coba fetch URL dengan berbagai strategi bypass
+ * @param {string} url
+ * @param {Function} log — callback(msg) untuk real-time log
+ */
+async function fetchWithBypass(url, log = () => {}) {
+  const axiosCfg = (headers, timeout = 18000) => ({
+    headers, timeout, maxRedirects: 6,
+    validateStatus: s => s < 600,
+    maxContentLength: 6 * 1024 * 1024,
+  });
+
+  let lastError = null;
+
+  // ── Layer 1: Direct fetch ──────────────────────────────────
+  log("🔵 [Layer 1] Mencoba fetch langsung...");
+  try {
+    const resp = await axios.get(url, axiosCfg(buildHeaders()));
+    if (resp.status < 400 && resp.data) {
+      log(`✅ [Layer 1] Berhasil! HTTP ${resp.status}`);
+      return { html: typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data), status: resp.status, layer: 1 };
+    }
+    log(`⚠️ [Layer 1] HTTP ${resp.status} — mencoba layer berikutnya`);
+    lastError = `HTTP ${resp.status}`;
+  } catch (e) {
+    log(`⚠️ [Layer 1] Gagal: ${e.message}`);
+    lastError = e.message;
+  }
+  await sleep(400);
+
+  // ── Layer 2: Mobile UA + Referrer bypass ───────────────────
+  log("🔵 [Layer 2] Mencoba mobile user-agent + referrer trick...");
+  try {
+    const mobileUA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36";
+    const hostname = new URL(url).hostname;
+    const resp = await axios.get(url, axiosCfg(buildHeaders({
+      "User-Agent": mobileUA,
+      "Referer":    `https://www.google.com/search?q=${encodeURIComponent(hostname)}`,
+      "Origin":     `https://${hostname}`,
+    })));
+    if (resp.status < 400 && resp.data) {
+      log(`✅ [Layer 2] Berhasil dengan mobile UA! HTTP ${resp.status}`);
+      return { html: typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data), status: resp.status, layer: 2 };
+    }
+    log(`⚠️ [Layer 2] HTTP ${resp.status}`);
+    lastError = `HTTP ${resp.status}`;
+  } catch (e) {
+    log(`⚠️ [Layer 2] Gagal: ${e.message}`);
+    lastError = e.message;
+  }
+  await sleep(600);
+
+  // ── Layer 3: Random delay + beda UA ───────────────────────
+  log("🔵 [Layer 3] Mencoba dengan random delay + rotate user-agent...");
+  try {
+    await sleep(Math.random() * 1500 + 500);
+    const resp = await axios.get(url, axiosCfg(buildHeaders({
+      "Referer": "https://www.google.com/",
+      "DNT": "1",
+    }), 25000));
+    if (resp.status < 400 && resp.data) {
+      log(`✅ [Layer 3] Berhasil! HTTP ${resp.status}`);
+      return { html: typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data), status: resp.status, layer: 3 };
+    }
+    log(`⚠️ [Layer 3] HTTP ${resp.status}`);
+  } catch (e) {
+    log(`⚠️ [Layer 3] Gagal: ${e.message}`);
+    lastError = e.message;
+  }
+
+  // ── Layer 4: Google Cache / AMP ────────────────────────────
+  log("🔵 [Layer 4] Mencoba Google Cache fallback...");
+  try {
+    const encoded  = encodeURIComponent(url);
+    const cacheUrl = `https://webcache.googleusercontent.com/search?q=cache:${encoded}`;
+    const resp = await axios.get(cacheUrl, axiosCfg(buildHeaders({
+      "Referer": "https://www.google.com/",
+    }), 15000));
+    if (resp.status === 200 && typeof resp.data === "string" && resp.data.length > 500) {
+      log(`✅ [Layer 4] Berhasil via Google Cache!`);
+      return { html: resp.data, status: 200, layer: 4, note: "dari Google Cache" };
+    }
+    log(`⚠️ [Layer 4] Cache tidak tersedia`);
+  } catch (e) {
+    log(`⚠️ [Layer 4] Google Cache gagal: ${e.message}`);
+  }
+
+  // ── Layer 5: Wayback Machine ───────────────────────────────
+  log("🔵 [Layer 5] Mencoba Wayback Machine (web.archive.org)...");
+  try {
+    const avail = await axios.get(
+      `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`,
+      { timeout: 10000, headers: buildHeaders() }
+    );
+    const snapUrl = avail.data?.archived_snapshots?.closest?.url;
+    if (snapUrl) {
+      log(`   Snapshot ditemukan: ${snapUrl.substring(0, 70)}...`);
+      const snap = await axios.get(snapUrl, axiosCfg(buildHeaders(), 20000));
+      if (snap.status === 200 && snap.data) {
+        log(`✅ [Layer 5] Berhasil via Wayback Machine!`);
+        return { html: typeof snap.data === "string" ? snap.data : JSON.stringify(snap.data), status: 200, layer: 5, note: "dari Wayback Machine" };
+      }
+    } else {
+      log(`⚠️ [Layer 5] Tidak ada snapshot Wayback Machine`);
+    }
+  } catch (e) {
+    log(`⚠️ [Layer 5] Wayback Machine gagal: ${e.message}`);
+  }
+
+  // ── Layer 6: iframe/embed via alternate URL format ──────────
+  log("🔵 [Layer 6] Mencoba variasi URL (www, http, path alternatif)...");
+  try {
+    const parsed = new URL(url);
+    const altUrls = [
+      url.replace("https://", "http://"),
+      `https://www.${parsed.hostname.replace("www.", "")}${parsed.pathname}${parsed.search}`,
+      `${parsed.origin}/`,
+    ].filter(u => u !== url);
+
+    for (const altUrl of altUrls) {
+      try {
+        const resp = await axios.get(altUrl, axiosCfg(buildHeaders(), 12000));
+        if (resp.status < 400 && resp.data) {
+          log(`✅ [Layer 6] Berhasil via URL alternatif: ${altUrl.substring(0,50)}`);
+          return { html: typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data), status: resp.status, layer: 6 };
+        }
+      } catch {}
+    }
+    log(`⚠️ [Layer 6] Semua URL alternatif gagal`);
+  } catch (e) {
+    log(`⚠️ [Layer 6] Error: ${e.message}`);
+  }
+
+  log(`❌ Semua ${6} layer bypass gagal. Error terakhir: ${lastError}`);
+  return { html: null, status: null, layer: null, error: lastError || "Semua strategi bypass gagal" };
+}
+
+/**
+ * parseHtmlToStructure — parse HTML yang sudah didapat jadi struktur data
+ */
+function parseHtmlToStructure(html, url) {
   const result = {
-    fetched: false, statusCode: null, html_snippet: "",
+    fetched: true, statusCode: null, html_snippet: "",
     title: "", meta_desc: "", h1_tags: [], h2_tags: [],
     class_samples: [], data_attrs: [], scripts_src: [],
     json_ld: null, next_data: null, forms: [], tables: [],
     img_count: 0, link_count: 0, detected_tech: [], error: null,
   };
-  try {
-    const resp = await axios.get(url, {
-      headers: FETCH_HEADERS_ANALYZE, timeout: 18000, maxRedirects: 5,
-      validateStatus: s => s < 600, maxContentLength: 5 * 1024 * 1024,
-    });
-    result.statusCode = resp.status;
-    const contentType = resp.headers["content-type"] || "";
-    if (contentType.includes("application/json")) {
-      const jStr = typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data, null, 2);
-      result.fetched = true;
-      result.html_snippet = jStr.substring(0, 3000);
-      result.detected_tech.push("JSON API (no HTML)");
-      return result;
-    }
-    if (!contentType.includes("html") && !contentType.includes("text")) {
-      result.error = `Bukan halaman HTML: ${contentType}`; return result;
-    }
-    const html = typeof resp.data === "string" ? resp.data : "";
-    if (!html) { result.error = "HTML kosong"; return result; }
-    result.fetched = true;
-    const $ = cheerio.load(html);
-    result.title     = $("title").first().text().trim().substring(0, 120);
-    result.meta_desc = ($("meta[name='description']").attr("content") || "").substring(0, 200);
-    result.h1_tags   = $("h1").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 5);
-    result.h2_tags   = $("h2").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 8);
 
-    const classSet = new Set();
-    $("[class]").each((_, el) => {
-      const cls = $(el).attr("class") || "";
-      cls.split(/\s+/).filter(c => c.length > 2 && c.length < 40 && !/^[0-9]/.test(c)).forEach(c => classSet.add(c));
-    });
-    result.class_samples = [...classSet].slice(0, 40);
+  const $ = cheerio.load(html);
+  result.title     = $("title").first().text().trim().substring(0, 120);
+  result.meta_desc = ($("meta[name='description']").attr("content") || "").substring(0, 200);
+  result.h1_tags   = $("h1").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 5);
+  result.h2_tags   = $("h2").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 8);
 
-    const dataAttrSet = new Set();
-    $("*").each((_, el) => {
-      Object.keys(el.attribs || {}).filter(a => a.startsWith("data-") && a.length < 40).forEach(a => dataAttrSet.add(a));
-    });
-    result.data_attrs = [...dataAttrSet].slice(0, 25);
-    result.scripts_src = $("script[src]").map((_, el) => $(el).attr("src") || "").get()
-      .filter(s => s && !s.includes("analytics") && !s.includes("gtag")).slice(0, 12);
+  const classSet = new Set();
+  $("[class]").each((_, el) => {
+    const cls = $(el).attr("class") || "";
+    cls.split(/\s+/).filter(c => c.length > 2 && c.length < 40 && !/^[0-9]/.test(c)).forEach(c => classSet.add(c));
+  });
+  result.class_samples = [...classSet].slice(0, 40);
 
-    $("script[type='application/ld+json']").each((_, el) => {
-      if (result.json_ld) return;
-      try { result.json_ld = JSON.stringify(JSON.parse($(el).text().trim())).substring(0, 800); } catch {}
-    });
+  const dataAttrSet = new Set();
+  $("*").each((_, el) => {
+    Object.keys(el.attribs || {}).filter(a => a.startsWith("data-") && a.length < 40).forEach(a => dataAttrSet.add(a));
+  });
+  result.data_attrs = [...dataAttrSet].slice(0, 25);
 
-    const nextMatch = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
-    if (nextMatch) {
-      try {
-        const nd = JSON.parse(nextMatch[1]);
-        result.next_data = JSON.stringify({ _keys: Object.keys(nd.props?.pageProps || nd), _route: nd.page }).substring(0, 400);
-      } catch { result.next_data = nextMatch[1].substring(0, 400); }
-    }
+  result.scripts_src = $("script[src]").map((_, el) => $(el).attr("src") || "").get()
+    .filter(s => s && !s.includes("analytics") && !s.includes("gtag")).slice(0, 12);
 
-    $("form").each((_, form) => {
-      const inputs = $(form).find("input,select,textarea")
-        .map((_, el) => `${el.tagName}[${$(el).attr("name") || $(el).attr("id") || "?"}]`).get();
-      if (inputs.length) result.forms.push(inputs.slice(0, 8).join(", "));
-    });
-    result.forms = result.forms.slice(0, 4);
+  $("script[type='application/ld+json']").each((_, el) => {
+    if (result.json_ld) return;
+    try { result.json_ld = JSON.stringify(JSON.parse($(el).text().trim())).substring(0, 800); } catch {}
+  });
 
-    $("table").each((_, tbl) => {
-      const headers = $(tbl).find("th").map((_, el) => $(el).text().trim()).get().filter(Boolean);
-      if (headers.length) result.tables.push(headers.slice(0, 8).join(" | "));
-    });
-    result.tables = result.tables.slice(0, 5);
-
-    result.img_count  = $("img").length;
-    result.link_count = $("a[href]").length;
-
-    const scriptContent = $("script:not([src])").text().substring(0, 5000);
-    const allScripts    = result.scripts_src.join(" ") + " " + html.substring(0, 3000);
-    const techChecks = [
-      ["Next.js",          /__NEXT_DATA__|_next\/static/],
-      ["React",            /react(?:\.min)?\.js|__reactFiber|_reactRootContainer/],
-      ["Vue.js",           /vue(?:\.min)?\.js|data-v-|__vue__/],
-      ["Angular",          /angular(?:\.min)?\.js|ng-app|ng-controller/],
-      ["Nuxt.js",          /__nuxt__|nuxt\.js/],
-      ["SvelteKit",        /svelte|__sveltekit/],
-      ["jQuery",           /jquery(?:\.min)?\.js|window\.\$/],
-      ["Webpack",          /webpack_require|__webpack_modules__/],
-      ["Tailwind CSS",     /tailwind|class="[^"]*(?:flex|grid|text-|bg-|p-|m-)[^"]*"/],
-      ["WordPress",        /wp-content|wp-includes/],
-      ["Shopify",          /shopify|Shopify\.theme/],
-      ["GraphQL",          /graphql|__typename/],
-      ["Infinite Scroll",  /infinite.?scroll|loadMore|next_page_token/i],
-      ["Login Required",   /login|sign.?in.*required|auth.*required/i],
-    ];
-    techChecks.forEach(([name, pattern]) => {
-      if (pattern.test(allScripts) || pattern.test(scriptContent)) result.detected_tech.push(name);
-    });
-
-    let snippet = "";
-    const candidates = ["main","article","[role='main']",".product",".content",".container","body"];
-    for (const sel of candidates) {
-      const el = $(sel).first();
-      if (el.length && el.text().trim().length > 100) { snippet = el.html() || ""; break; }
-    }
-    if (!snippet) snippet = $("body").html() || html;
-    const $c = cheerio.load(snippet);
-    $c("script,style,noscript,iframe,svg,head").remove();
-    let cleaned = $c.html() || snippet;
-    cleaned = cleaned.replace(/\s{2,}/g, " ").replace(/<!--[\s\S]*?-->/g, "").trim();
-    result.html_snippet = cleaned.substring(0, 8000);
-  } catch (e) {
-    result.error = e.message;
+  const nextMatch = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+  if (nextMatch) {
+    try {
+      const nd = JSON.parse(nextMatch[1]);
+      result.next_data = JSON.stringify({ _keys: Object.keys(nd.props?.pageProps || nd), _route: nd.page }).substring(0, 400);
+    } catch { result.next_data = nextMatch[1].substring(0, 400); }
   }
+
+  $("form").each((_, form) => {
+    const inputs = $(form).find("input,select,textarea")
+      .map((_, el) => `${el.tagName}[${$(el).attr("name") || $(el).attr("id") || "?"}]`).get();
+    if (inputs.length) result.forms.push(inputs.slice(0, 8).join(", "));
+  });
+  result.forms = result.forms.slice(0, 4);
+
+  $("table").each((_, tbl) => {
+    const headers = $(tbl).find("th").map((_, el) => $(el).text().trim()).get().filter(Boolean);
+    if (headers.length) result.tables.push(headers.slice(0, 8).join(" | "));
+  });
+  result.tables = result.tables.slice(0, 5);
+
+  result.img_count  = $("img").length;
+  result.link_count = $("a[href]").length;
+
+  const scriptContent = $("script:not([src])").text().substring(0, 5000);
+  const allScripts    = result.scripts_src.join(" ") + " " + html.substring(0, 3000);
+  const techChecks = [
+    ["Next.js",         /__NEXT_DATA__|_next\/static/],
+    ["React",           /react(?:\.min)?\.js|__reactFiber|_reactRootContainer/],
+    ["Vue.js",          /vue(?:\.min)?\.js|data-v-|__vue__/],
+    ["Angular",         /angular(?:\.min)?\.js|ng-app|ng-controller/],
+    ["Nuxt.js",         /__nuxt__|nuxt\.js/],
+    ["SvelteKit",       /svelte|__sveltekit/],
+    ["jQuery",          /jquery(?:\.min)?\.js|window\.\$/],
+    ["Webpack",         /webpack_require|__webpack_modules__/],
+    ["Tailwind CSS",    /tailwind/],
+    ["WordPress",       /wp-content|wp-includes/],
+    ["Shopify",         /shopify|Shopify\.theme/],
+    ["GraphQL",         /graphql|__typename/],
+    ["Infinite Scroll", /infinite.?scroll|loadMore|next_page_token/i],
+    ["Login Required",  /login.*required|sign.?in.*required/i],
+  ];
+  techChecks.forEach(([name, pattern]) => {
+    if (pattern.test(allScripts) || pattern.test(scriptContent)) result.detected_tech.push(name);
+  });
+
+  let snippet = "";
+  const candidates = ["main","article","[role='main']",".product",".content",".container","body"];
+  for (const sel of candidates) {
+    const el = $(sel).first();
+    if (el.length && el.text().trim().length > 100) { snippet = el.html() || ""; break; }
+  }
+  if (!snippet) snippet = $("body").html() || html;
+  const $c = cheerio.load(snippet);
+  $c("script,style,noscript,iframe,svg,head").remove();
+  let cleaned = ($c.html() || snippet).replace(/\s{2,}/g, " ").replace(/<!--[\s\S]*?-->/g, "").trim();
+  result.html_snippet = cleaned.substring(0, 8000);
   return result;
 }
 
-// ── POST /api/analyze ─────────────────────────────────────────
-app.post("/api/analyze", async (req, res) => {
-  const { url, provider, apiKey, model } = req.body;
-  if (!url || !apiKey) return res.status(400).json({ error: "url dan apiKey diperlukan" });
+// ── GET /api/analyze/stream — SSE real-time logging ───────────
+// Dipanggil dari frontend sebelum POST /api/analyze
+// Mengirim event stream: log langkah-langkah bypass + analisa
+app.get("/api/analyze/stream", async (req, res) => {
+  const { url, provider, apiKey, model } = req.query;
+  if (!url || !apiKey) { res.status(400).json({ error: "url dan apiKey diperlukan" }); return; }
+
+  // SSE headers
+  res.setHeader("Content-Type",  "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection",    "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const send = (type, data) => {
+    if (res.writableEnded) return;
+    res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const log  = (msg)    => send("log",    { msg, ts: Date.now() });
+  const done = (result) => send("result", result);
+  const fail = (err)    => send("error",  { msg: err });
 
   try {
-    const [fw, htmlData] = await Promise.all([
-      detectFirewall(url),
-      fetchAndExtractHtml(url),
-    ]);
+    log(`🚀 Memulai analisa untuk: ${url}`);
+    log(`🤖 AI Provider: ${provider}`);
 
+    // Step 1: Firewall detection
+    log("🛡️ Mendeteksi proteksi firewall...");
+    const fw = await detectFirewall(url);
+    if (fw.cloudflare)     log("⚠️  Terdeteksi: Cloudflare");
+    if (fw.waf)            log("⚠️  Terdeteksi: WAF (Web Application Firewall)");
+    if (fw.bot_protection) log("⚠️  Terdeteksi: Bot Protection");
+    if (!fw.bypass_recommended) log("✅ Tidak ada proteksi khusus terdeteksi");
+
+    // Step 2: Fetch HTML with bypass
+    log("🌐 Memulai fetch HTML...");
+    const fetchResult = await fetchWithBypass(url, log);
+
+    let htmlData;
+    if (fetchResult.html) {
+      log(`🔍 Parsing struktur HTML (layer ${fetchResult.layer})...`);
+      if (fetchResult.note) log(`   ℹ️  ${fetchResult.note}`);
+      htmlData = parseHtmlToStructure(fetchResult.html, url);
+      htmlData.statusCode = fetchResult.status;
+      log(`   📄 Title: ${htmlData.title || "(tidak ada)"}`);
+      log(`   🔧 Teknologi: ${htmlData.detected_tech.join(", ") || "Standar HTML"}`);
+      log(`   🖼  Gambar: ${htmlData.img_count} | 🔗 Link: ${htmlData.link_count}`);
+      if (htmlData.json_ld)   log("   ✅ JSON-LD Structured Data ditemukan");
+      if (htmlData.next_data) log("   ✅ __NEXT_DATA__ (Next.js) ditemukan");
+      if (htmlData.class_samples.length) log(`   🎨 ${htmlData.class_samples.length} CSS class terdeteksi`);
+    } else {
+      log(`❌ Fetch gagal setelah semua layer: ${fetchResult.error}`);
+      log("   AI akan tetap analisa berdasarkan URL dan informasi firewall");
+      htmlData = {
+        fetched: false, statusCode: fetchResult.status, html_snippet: "",
+        title: "", meta_desc: "", h1_tags: [], h2_tags: [],
+        class_samples: [], data_attrs: [], scripts_src: [],
+        json_ld: null, next_data: null, forms: [], tables: [],
+        img_count: 0, link_count: 0, detected_tech: fw.cloudflare ? ["Cloudflare Protected"] : [],
+        error: fetchResult.error,
+      };
+    }
+
+    // Step 3: AI Analyze
+    log("🤖 Memulai analisa AI...");
     const needsBypass = fw.bypass_recommended ||
       htmlData.detected_tech.some(t => ["Next.js","React","Angular","Vue.js","Infinite Scroll","SvelteKit","Nuxt.js"].includes(t));
 
@@ -785,63 +983,63 @@ Tabel: ${htmlData.tables.join(" | ") || "(tidak ada)"}
 
 === SNIPPET HTML BERSIH ===
 ${htmlData.html_snippet}
-` : `URL: ${url}\nHTML fetch gagal: ${htmlData.error || "timeout/blocked"}\nFirewall: ${fw.cloudflare ? "Cloudflare" : "tidak ada"}`;
+` : `URL: ${url}\nHTML fetch gagal: ${htmlData.error || "blocked"}\nFirewall: ${fw.cloudflare ? "Cloudflare" : "tidak ada"}`;
 
     const analyzeSystem = `Kamu adalah SmartScrapeAI senior web scraping engineer berbahasa Indonesia.
-Kamu diberi DATA ASLI HTML dari website yang sudah di-fetch: class CSS, data attributes, JSON-LD, teknologi terdeteksi, dan snippet HTML nyata.
-Gunakan data ini untuk analisa yang SANGAT AKURAT dan SPESIFIK — bukan hanya berdasarkan nama domain.
-
-ATURAN:
+Kamu diberi DATA ASLI HTML dari website yang sudah di-fetch. Gunakan data ini untuk analisa SANGAT AKURAT dan SPESIFIK.
 - Gunakan class CSS dan data attributes nyata dari HTML untuk saran selector
-- Jika terdeteksi Next.js/React/SPA → WAJIB rekomendasikan puppeteer/playwright, bukan axios biasa
-- Jika ada JSON-LD atau __NEXT_DATA__ → sebutkan data bisa diambil dari embedded JSON (lebih akurat)
+- Jika terdeteksi Next.js/React/SPA → WAJIB rekomendasikan puppeteer/playwright
+- Jika ada JSON-LD atau __NEXT_DATA__ → sebutkan data bisa diambil dari embedded JSON
 - Suggestions HARUS menyebut nama field/class/key spesifik yang terlihat di HTML
 
 Balas HANYA JSON valid tanpa markdown:
 {
-  "greeting": "2 kalimat: jenis website + teknologi terdeteksi + strategi scraping terbaik",
-  "question": "tanya field spesifik yang terlihat di HTML (1 kalimat, sebut nama class/key nyata)",
-  "suggestions": ["field spesifik dari HTML misal: .price, data-product-id, atau __NEXT_DATA__.props.product.name"],
-  "site_type": "ecommerce|news|social|blog|api|forum|dashboard|other",
+  "greeting": "2 kalimat: jenis website + teknologi + strategi terbaik",
+  "question": "tanya field spesifik dari HTML (1 kalimat)",
+  "suggestions": ["field spesifik dari HTML"],
+  "site_type": "ecommerce|news|social|blog|api|forum|other",
   "complexity": "simple|moderate|complex",
-  "complexity_reason": "1 kalimat spesifik sebut teknologinya",
-  "scraping_strategy": "2-3 kalimat strategi: apakah perlu browser automation, embedded JSON tersedia, dll",
-  "css_selectors": { "note": "selector dari HTML asli", "selectors": ["sel1","sel2","sel3"] },
+  "complexity_reason": "1 kalimat spesifik",
+  "scraping_strategy": "2-3 kalimat: perlu browser automation? embedded JSON tersedia?",
+  "css_selectors": { "note": "dari HTML asli", "selectors": ["sel1","sel2","sel3"] },
   "recommended_modules": {
-    "nodejs": { "packages": ["pkg1"], "reason": "alasan spesifik berdasarkan tech stack", "install_cmd": "npm install pkg1" },
-    "python": { "packages": ["pkg1"], "reason": "alasan spesifik", "install_cmd": "pip install pkg1" },
+    "nodejs": { "packages": ["pkg"], "reason": "alasan spesifik", "install_cmd": "npm install pkg" },
+    "python": { "packages": ["pkg"], "reason": "alasan spesifik", "install_cmd": "pip install pkg" },
     "php":    { "packages": ["guzzlehttp/guzzle"], "reason": "alasan", "install_cmd": "composer require guzzlehttp/guzzle" }
   }
 }`;
 
+    log("   Mengirim data ke AI untuk dianalisa...");
     const raw = await callAI({ provider, apiKey, model, system: analyzeSystem, prompt: htmlContext, maxTokens: 1200 });
+    log("   AI selesai menjawab. Memproses hasil...");
+
     const clean = raw.replace(/```json|```/g, "").trim();
     let parsed;
-    try { parsed = JSON.parse(clean); }
-    catch {
+    try {
+      parsed = JSON.parse(clean);
+      log(`✅ Analisa selesai! Site type: ${parsed.site_type || "unknown"}, Kompleksitas: ${parsed.complexity || "?"}`);
+    } catch {
+      log("⚠️  JSON parse gagal, menggunakan fallback analisa");
       const host = (() => { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } })();
-      const isSocial = ["instagram","tiktok","twitter","x.com","facebook"].some(s => host.includes(s));
-      const isEcomm  = ["shopee","tokopedia","lazada","amazon","ebay"].some(s => host.includes(s));
+      const isEcomm = ["shopee","tokopedia","lazada","amazon"].some(s => host.includes(s));
       parsed = {
-        greeting:    `Website ${htmlData.title || url}. Teknologi: ${htmlData.detected_tech.join(", ") || "Standar HTML"}.`,
-        question:    "Data apa yang ingin kamu ambil dari website ini?",
+        greeting: `Website ${htmlData.title || url}. Teknologi: ${htmlData.detected_tech.join(", ") || "Standar HTML"}.`,
+        question: "Data apa yang ingin kamu ambil?",
         suggestions: htmlData.h2_tags.slice(0,4).length
           ? [...htmlData.h2_tags.slice(0,4),"Gambar & media","Link & URL"]
           : ["Judul & konten","Harga & produk","Gambar","Link","Data tabel","Metadata"],
-        site_type:   isSocial ? "social" : isEcomm ? "ecommerce" : "other",
-        complexity:  needsBypass ? "complex" : "moderate",
+        site_type: isEcomm ? "ecommerce" : "other",
+        complexity: needsBypass ? "complex" : "moderate",
         complexity_reason: needsBypass ? `Terdeteksi: ${htmlData.detected_tech.join(", ")}` : "Struktur HTML standar",
-        scraping_strategy: needsBypass
-          ? "Gunakan puppeteer-extra + stealth untuk Node.js atau playwright untuk Python karena site menggunakan JS rendering."
-          : "Bisa pakai axios+cheerio (Node.js) atau requests+BeautifulSoup (Python) untuk site HTML statis ini.",
-        css_selectors: { note: "Sample dari HTML", selectors: htmlData.class_samples.slice(0,5) },
+        scraping_strategy: needsBypass ? "Gunakan puppeteer-extra + stealth untuk bypass." : "axios+cheerio sudah cukup.",
+        css_selectors: { note: "Sample class", selectors: htmlData.class_samples.slice(0,5) },
         recommended_modules: {
           nodejs: needsBypass
             ? { packages: ["puppeteer-extra","puppeteer-extra-plugin-stealth"], reason: "Butuh browser automation", install_cmd: "npm install puppeteer-extra puppeteer-extra-plugin-stealth" }
             : { packages: ["axios","cheerio"], reason: "HTML statis", install_cmd: "npm install axios cheerio" },
           python: needsBypass
-            ? { packages: ["playwright","beautifulsoup4"], reason: "playwright untuk JS rendering", install_cmd: "pip install playwright beautifulsoup4" }
-            : { packages: ["requests","beautifulsoup4","lxml"], reason: "Standar HTML statis", install_cmd: "pip install requests beautifulsoup4 lxml" },
+            ? { packages: ["playwright","beautifulsoup4"], reason: "playwright untuk JS", install_cmd: "pip install playwright beautifulsoup4" }
+            : { packages: ["requests","beautifulsoup4","lxml"], reason: "Standar", install_cmd: "pip install requests beautifulsoup4 lxml" },
           php: { packages: ["guzzlehttp/guzzle"], reason: "HTTP client PHP", install_cmd: "composer require guzzlehttp/guzzle" },
         },
       };
@@ -853,9 +1051,175 @@ Balas HANYA JSON valid tanpa markdown:
       has_json_ld: !!htmlData.json_ld, has_next_data: !!htmlData.next_data,
       img_count: htmlData.img_count, link_count: htmlData.link_count,
       fetch_error: htmlData.error || null,
+      bypass_layer: fetchResult?.layer || null,
     };
 
-    res.json({ success: true, url, firewall: fw, ai: parsed, html_info });
+    log("✅ Semua proses selesai! Memuat hasil...");
+    done({ success: true, url, firewall: fw, ai: parsed, html_info });
+
+  } catch (e) {
+    console.error("[analyze/stream]", e.message);
+    fail(e.message);
+  } finally {
+    if (!res.writableEnded) res.end();
+  }
+});
+
+// ── GET /api/generate/stream — SSE real-time log generate kode ─
+app.get("/api/generate/stream", async (req, res) => {
+  const { url, target, lang, bypassCF, provider, apiKey, model, moduleType } = req.query;
+  if (!url || !target || !lang || !apiKey) { res.status(400).json({ error: "url, target, lang, apiKey diperlukan" }); return; }
+
+  res.setHeader("Content-Type",  "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection",    "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const send = (type, data) => {
+    if (res.writableEnded) return;
+    res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  const log  = (msg)    => send("log",    { msg, ts: Date.now() });
+  const done = (result) => send("result", result);
+  const fail = (err)    => send("error",  { msg: err });
+
+  const langLabel = { nodejs:"Node.js", python:"Python", php:"PHP" };
+  const bCF = bypassCF === "true";
+
+  try {
+    log(`🚀 Generate ${langLabel[lang]} scraper dimulai`);
+    log(`🌐 Target URL: ${url}`);
+    log(`🎯 Data yang di-scrape: ${target}`);
+    log(`🔓 Bypass CF: ${bCF ? "AKTIF" : "Tidak aktif"}`);
+    if (moduleType && lang === "nodejs") log(`📦 Module type: ${moduleType}`);
+
+    log("🤖 Mengirim request ke AI provider...");
+    log("   Ini bisa memakan waktu 30–90 detik, harap tunggu...");
+
+    const SHARED_RULES = `
+ATURAN TIDAK BOLEH DILANGGAR:
+1. Output HANYA kode MENTAH — tidak ada markdown, backtick, penjelasan di luar kode
+2. Kode HARUS LENGKAP dari awal sampai akhir — jangan pernah potong dengan "// ... dst"
+3. Setiap fungsi, loop, try/catch HARUS punya penutup yang lengkap
+4. Komentar bahasa Indonesia di dalam kode boleh
+5. Jika kode panjang, tetap tulis SELURUHNYA`;
+
+    const moduleNote = lang === "nodejs" && moduleType
+      ? moduleType === "esm"    ? "\nGunakan ES Module syntax: import/export, file .mjs"
+      : moduleType === "esm-ts" ? "\nGunakan TypeScript + ES Module: import/export dengan type annotations, file .ts"
+      : "\nGunakan CommonJS: require()/module.exports"
+      : "";
+
+    const sysMap = {
+      nodejs: `Kamu adalah senior Node.js web scraping engineer.
+${bCF ? "PENTING: Gunakan puppeteer-extra + puppeteer-extra-plugin-stealth, random user-agent, delay acak 1500-3000ms." : "Gunakan axios + cheerio."}${moduleNote}${SHARED_RULES}
+- Mulai dari: // SmartScrapeAI Generated Script
+- require()/import semua library di atas
+- async main() dengan try/catch lengkap
+- console.log(JSON.stringify(result, null, 2))
+- Akhiri: main().catch(console.error)`,
+
+      python: `Kamu adalah senior Python web scraping engineer.
+${bCF ? "PENTING: Gunakan cloudscraper, fake_useragent.UserAgent(), BeautifulSoup, time.sleep(random.uniform(1.5,3.0))." : "Gunakan requests + BeautifulSoup4."}${SHARED_RULES}
+- Mulai dari: # SmartScrapeAI Generated Script
+- import semua di atas
+- def main() dengan try/except lengkap
+- print(json.dumps(result, indent=2, ensure_ascii=False))
+- if __name__ == '__main__': main()`,
+
+      php: `Kamu adalah senior PHP web scraping engineer.
+${bCF ? "PENTING: Gunakan cURL dengan full browser headers, rotate User-Agent, sleep(rand(1,3))." : "Gunakan cURL + DOMDocument."}${SHARED_RULES}
+- Mulai dari: <?php
+- Semua fungsi helper di atas
+- try/catch lengkap
+- echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);`,
+    };
+
+    const prompt = `URL Target: ${url}
+Yang akan di-scrape: ${target}
+Bahasa: ${langLabel[lang]}
+${bCF ? "Mode Bypass Cloudflare: AKTIF — wajib gunakan semua teknik stealth bypass" : ""}
+
+Tulis scraper LENGKAP untuk mengambil: ${target}
+Struktur wajib:
+1. Import/require semua library
+2. Konfigurasi (URL, headers, delay)
+3. Fungsi fetch halaman${bCF ? " dengan bypass CF/stealth" : ""}
+4. Fungsi parse & ekstrak: ${target}
+5. Fungsi format/bersihkan data
+6. Fungsi main() memanggil semua
+7. Output JSON ke console
+8. Error handling di setiap fungsi
+
+PENTING: Tulis SEMUA kode dari awal sampai akhir. JANGAN potong atau skip bagian apapun.`;
+
+    const code = await (async () => {
+      const raw = await callAI({ provider, apiKey, model, system: sysMap[lang], prompt, maxTokens: null });
+      return raw.replace(/^```[\w]*\n?/gm, "").replace(/^```\n?/gm, "").trim();
+    })();
+
+    log(`✅ AI selesai generate kode!`);
+    log(`   📝 Panjang kode: ${code.split("\n").length} baris`);
+    log("   💾 Menyimpan ke registry...");
+
+    const id        = uuidv4();
+    const trySchema = buildTrySchema(url, target);
+    const host      = (() => { try { return new URL(url).hostname.replace("www.", ""); } catch { return "site"; } })();
+    const extMap    = { nodejs: moduleType === "esm" ? "mjs" : moduleType === "esm-ts" ? "ts" : "js", python: "py", php: "php" };
+
+    const entry = {
+      id, name: `${host}-scraper`, url, target, lang, bypassCF: bCF, code,
+      trySchema, provider, model: model || "default",
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      filename: `scraper.${extMap[lang]}`, fixCount: 0, history: [],
+    };
+    registry.add(entry);
+
+    log(`✅ Scraper tersimpan dengan ID: ${id}`);
+    log("🎉 Generate selesai! Siap digunakan.");
+    done({ success: true, id, code, trySchema, entry });
+
+  } catch (e) {
+    console.error("[generate/stream]", e.message);
+    fail(e.message);
+  } finally {
+    if (!res.writableEnded) res.end();
+  }
+});
+
+// ── POST /api/analyze ─────────────────────────────────────────
+// Legacy endpoint (tanpa SSE) — tetap dipertahankan untuk kompatibilitas
+app.post("/api/analyze", async (req, res) => {
+  const { url, provider, apiKey, model } = req.body;
+  if (!url || !apiKey) return res.status(400).json({ error: "url dan apiKey diperlukan" });
+
+  try {
+    const [fw, fetchResult] = await Promise.all([
+      detectFirewall(url),
+      fetchWithBypass(url, () => {}),
+    ]);
+
+    let htmlData;
+    if (fetchResult.html) {
+      htmlData = parseHtmlToStructure(fetchResult.html, url);
+      htmlData.statusCode = fetchResult.status;
+    } else {
+      htmlData = { fetched: false, statusCode: null, html_snippet: "", title: "", meta_desc: "", h1_tags: [], h2_tags: [], class_samples: [], data_attrs: [], scripts_src: [], json_ld: null, next_data: null, forms: [], tables: [], img_count: 0, link_count: 0, detected_tech: [], error: fetchResult.error };
+    }
+
+    const needsBypass = fw.bypass_recommended || htmlData.detected_tech.some(t => ["Next.js","React","Angular","Vue.js","SvelteKit","Nuxt.js"].includes(t));
+    const htmlContext = htmlData.fetched
+      ? `URL:${url}\nTitle:${htmlData.title}\nH1:${htmlData.h1_tags.join("|")}\nTech:${htmlData.detected_tech.join(",")}\nClasses:${htmlData.class_samples.slice(0,20).join(",")}\nJSON-LD:${htmlData.json_ld||"none"}\nNEXT:${htmlData.next_data||"none"}\n\nHTML:\n${htmlData.html_snippet}`
+      : `URL:${url}\nFetch failed:${htmlData.error}\nFirewall:${fw.cloudflare?"Cloudflare":"none"}`;
+
+    const raw = await callAI({ provider, apiKey, model, system: `Kamu SmartScrapeAI engineer. Analisa website dari HTML asli. Balas JSON valid: {"greeting":"...","question":"...","suggestions":[...],"site_type":"...","complexity":"...","complexity_reason":"...","scraping_strategy":"...","css_selectors":{"note":"...","selectors":[]},"recommended_modules":{"nodejs":{"packages":[],"reason":"","install_cmd":""},"python":{"packages":[],"reason":"","install_cmd":""},"php":{"packages":[],"reason":"","install_cmd":""}}}`, prompt: htmlContext, maxTokens: 1200 });
+    const clean = raw.replace(/```json|```/g, "").trim();
+    let parsed;
+    try { parsed = JSON.parse(clean); }
+    catch { parsed = { greeting: `Website ${htmlData.title||url}.`, question: "Data apa yang ingin kamu ambil?", suggestions: ["Konten utama","Judul & heading","Gambar & media","Link & URL","Data tabel","Metadata"], site_type: "other", complexity: needsBypass?"complex":"moderate", complexity_reason: needsBypass?"Butuh browser automation":"HTML standar", scraping_strategy: needsBypass?"Gunakan puppeteer-extra.":"axios+cheerio sudah cukup.", css_selectors: {note:"sample",selectors:htmlData.class_samples.slice(0,4)}, recommended_modules: { nodejs: needsBypass?{packages:["puppeteer-extra","puppeteer-extra-plugin-stealth"],reason:"bypass",install_cmd:"npm install puppeteer-extra puppeteer-extra-plugin-stealth"}:{packages:["axios","cheerio"],reason:"statis",install_cmd:"npm install axios cheerio"}, python: needsBypass?{packages:["playwright","beautifulsoup4"],reason:"JS",install_cmd:"pip install playwright beautifulsoup4"}:{packages:["requests","beautifulsoup4"],reason:"standar",install_cmd:"pip install requests beautifulsoup4"}, php:{packages:["guzzlehttp/guzzle"],reason:"http",install_cmd:"composer require guzzlehttp/guzzle"} } }; }
+
+    res.json({ success:true, url, firewall:fw, ai:parsed, html_info:{ fetched:htmlData.fetched, status_code:htmlData.statusCode, title:htmlData.title, detected_tech:htmlData.detected_tech, has_json_ld:!!htmlData.json_ld, has_next_data:!!htmlData.next_data, img_count:htmlData.img_count, link_count:htmlData.link_count, fetch_error:htmlData.error||null } });
   } catch (e) {
     console.error("[analyze]", e.message);
     res.status(500).json({ error: e.message });
