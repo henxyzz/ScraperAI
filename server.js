@@ -24,6 +24,10 @@ const app     = express();
 const PORT    = process.env.PORT || 8080;
 const IS_PROD = process.env.NODE_ENV === "production";
 
+// ── Trust Proxy (Clever Cloud / Nginx / Load Balancer) ────────
+// Wajib agar express-rate-limit bisa baca X-Forwarded-For dengan benar
+app.set("trust proxy", 1);
+
 // Buat direktori data jika belum ada
 const DATA_DIR = path.join(__dirname, "data");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -534,35 +538,32 @@ app.post("/api/prefetch", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "url diperlukan" });
 
-  // Quick fetch — cukup layer 1 & 2
-  const axCfg = { timeout: 12000, validateStatus: () => true,
-    headers: buildHeaders({ "Referer": "https://www.google.com/" }) };
+  // Gunakan fetchWithBypass penuh (6 layer) agar bypass firewall otomatis
+  const logs = [];
+  const log  = (msg) => logs.push(msg);
 
-  let html = null;
-  let layer = 0;
-  let fetchError = null;
-
-  // Layer 1: direct
+  let fetchResult;
   try {
-    const r = await axios.get(url, axCfg);
-    if (r.status < 400 && r.data) { html = typeof r.data === "string" ? r.data : JSON.stringify(r.data); layer = 1; }
-  } catch (e) { fetchError = e.message; }
-
-  // Layer 2: rotate UA + delay
-  if (!html) {
-    try {
-      await randomDelay(400, 900);
-      const r = await axios.get(url, { ...axCfg, headers: buildHeaders({ "User-Agent": randomUA("mobile"), "Referer": "https://www.google.com/" }) });
-      if (r.status < 400 && r.data) { html = typeof r.data === "string" ? r.data : JSON.stringify(r.data); layer = 2; }
-    } catch (e) { fetchError = e.message; }
+    fetchResult = await fetchWithBypass(url, log);
+  } catch (e) {
+    return res.json({
+      success:  false,
+      error:    e.message || "Fetch gagal",
+      elements: [],
+      hint:     "URL tidak bisa diakses. Coba Analisa untuk info lebih lanjut.",
+    });
   }
+
+  const html = fetchResult?.html;
+  const layer = fetchResult?.layer;
 
   if (!html) {
     return res.json({
-      success: false,
-      error: fetchError || "Tidak bisa fetch HTML",
+      success:  false,
+      error:    fetchResult?.error || "Tidak bisa fetch HTML",
       elements: [],
-      hint: "URL mungkin memerlukan bypass. Lanjut ke Analisa untuk multi-layer fetch.",
+      hint:     "Semua 6 layer bypass gagal. URL mungkin memerlukan Puppeteer/browser stealth.",
+      bypass_logs: logs,
     });
   }
 
@@ -1649,6 +1650,7 @@ app.post("/api/analyze", async (req, res) => {
     console.error("[analyze]", e.message);
     res.status(500).json({ error: e.message });
   }
+});
 
 // ── POST /api/generate ────────────────────────────────────────
 app.post("/api/generate", async (req, res) => {
@@ -2300,20 +2302,6 @@ app.delete("/api/scraper/:id", (req, res) => {
   res.json({ success: true, message: "Scraper dihapus" });
 });
 
-// ── Fallback untuk React Router (Production) ──────────────────
-if (IS_PROD) {
-  app.get("*", (req, res) => {
-    const indexPath = path.join(__dirname, "client", "dist", "index.html");
-    if (fs.existsSync(indexPath)) {
-      res.sendFile(indexPath);
-    } else {
-      res.status(404).json({ error: "Frontend build tidak ditemukan. Jalankan: npm run build" });
-    }
-  });
-}
-
-// ── Start ─────────────────────────────────────────────────────
-
 // ══════════════════════════════════════════════════════════════
 //  v4: API ROUTES MANAGEMENT
 //  Auto-add scraper ke /api/generated/:category/:name
@@ -2571,54 +2559,6 @@ app.use("/api/generated", (err, req, res, next) => {
   });
 });
 
-// ── Update /api/docs untuk include generated routes ───────────
-// Patch docs endpoint to include apiRoutes
-const originalDocsHandler = app._router.stack
-  .filter(l => l.route?.path === "/api/docs")
-  .pop();
-
-// Override docs endpoint dengan versi v4
-app.get("/api/docs/v4", (req, res) => {
-  const all   = registry.getAll();
-  const allApiRoutes = all.flatMap(s => (s.apiRoutes || []).map(r => ({ ...r, scraperName: s.name })));
-
-  res.json({
-    name:           "SmartScrapeAI — API Documentation v4",
-    version:        "4.0.0",
-    description:    "Auto-generated API docs + Generated Routes dari scraper",
-    baseURL:        `${req.protocol}://${req.get("host")}`,
-    totalEndpoints: all.length + 18 + allApiRoutes.length,
-    generatedRoutes: allApiRoutes,
-    generatedRouteCount: allApiRoutes.length,
-    scrapers: all.map(s => ({
-      id:          s.id,
-      name:        s.name,
-      url:         s.url,
-      target:      s.target,
-      lang:        s.lang,
-      bypassCF:    s.bypassCF,
-      provider:    s.provider,
-      model:       s.model,
-      fixCount:    s.fixCount || 0,
-      createdAt:   s.createdAt,
-      updatedAt:   s.updatedAt,
-      endpoint:    `/api/scraper/${s.id}`,
-      download:    `/api/scraper/${s.id}/download`,
-      zip:         `/api/scraper/${s.id}/zip`,
-      tryEndpoint: `/api/scraper/${s.id}/try`,
-      tryInputs:   s.trySchema,
-      apiRoutes:   s.apiRoutes || [],
-    })),
-    providers: {
-      supported: ["anthropic","openai","groq","gemini","deepseek","mistral","xai","together"],
-      usage:     "Kirim provider + apiKey di setiap request POST yang butuh AI",
-    },
-  });
-});
-
-});
-
-
 // ══════════════════════════════════════════════════════════════
 //  C3 STORAGE — Cloudflare R2 Sync
 // ══════════════════════════════════════════════════════════════
@@ -2744,8 +2684,13 @@ app.delete("/api/c3/file/:name", async (req, res) => {
 });
 
 // ── Fallback (Production React build) ────────────────────────
+// HANYA untuk non-API routes agar request /api/* tetap return JSON error
 if (IS_PROD) {
   app.get("*", (req, res) => {
+    // Jangan serve index.html untuk /api/* — kembalikan 404 JSON
+    if (req.path.startsWith("/api/") || req.path.startsWith("/health")) {
+      return res.status(404).json({ error: "Endpoint tidak ditemukan", path: req.path });
+    }
     const idx = path.join(__dirname, "client", "dist", "index.html");
     if (fs.existsSync(idx)) {
       res.sendFile(idx);

@@ -105,7 +105,7 @@ export function GeneratorView() {
   };
 
   const loadTemplates = async () => {
-    if (templates.length) { setShowTemplates((p: boolean)=>!p); return; }
+    if (templates.length) { setShowTemplates(v=>!v); return; }
     try { const r = await getTemplates(); setTemplates(r.templates); setShowTemplates(true); }
     catch { addToast("error","Gagal load templates"); }
   };
@@ -499,7 +499,7 @@ export function GeneratorView() {
           {genLogs.length > 0 && (
             <div style={{background:"rgba(0,0,0,.5)",border:"1px solid var(--border2)",borderRadius:10,overflow:"hidden"}}>
               <button
-                onClick={()=>setShowGenLogs((p: boolean)=>!p)}
+                onClick={()=>setShowGenLogs(v=>!v)}
                 style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"9px 14px",
                   background:"transparent",border:"none",cursor:"pointer",color:"var(--muted)",
                   fontFamily:"var(--mono)",fontSize:11,textAlign:"left"}}
@@ -841,7 +841,7 @@ function ApiRoutesPanel({ scraperId, scraperName }:ApiRoutesPanelProps) {
         </div>
       ))}
 
-      <button className="btn btn-secondary" onClick={()=>setShowForm((p: boolean)=>!p)} style={{alignSelf:"flex-start"}}>
+      <button className="btn btn-secondary" onClick={()=>setShowForm(v=>!v)} style={{alignSelf:"flex-start"}}>
         <Route size={13}/> {showForm?"Tutup Form":"+ Buat API Route"}
       </button>
 

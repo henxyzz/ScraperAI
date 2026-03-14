@@ -127,7 +127,7 @@ export function TryOutputPanel({ scraper, compact = false }: Props) {
   return (
     <div className="try-panel">
       {compact && (
-        <button className="try-panel-toggle" onClick={() => setExpanded((p: boolean) => !p)}>
+        <button className="try-panel-toggle" onClick={() => setExpanded(v => !v)}>
           <Play size={12} style={{ color: "var(--neon3)" }} />
           <span>Try It</span>
           {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
