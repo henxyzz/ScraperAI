@@ -6,11 +6,11 @@ import {
   ChevronDown, ChevronUp, Activity,
 } from "lucide-react";
 import { useStore } from "../store";
-import { generateScraper, getTemplates, installDeps, getApiRoutes, createApiRoute, deleteApiRoute, prefetchUrl, previewUrl } from "../api";
+import { generateScraper, getTemplates, installDeps, getApiRoutes, createApiRoute, deleteApiRoute, prefetchUrl, previewUrl, detectUrl } from "../api";
 import { FirewallInfo } from "./FirewallInfo";
 import { TryOutputPanel } from "./TryOutputPanel";
 import { CodeBlock } from "./CodeBlock";
-import type { Template, Lang, ApiRoute, PrefetchElement, PrefetchResult } from "../types";
+import type { Template, Lang, ApiRoute, PrefetchElement, PrefetchResult, UrlDetectResult } from "../types";
 
 type ModuleType = "commonjs" | "esm" | "esm-ts";
 interface ModuleTypeOpt { value: ModuleType; label: string; sub: string; ext: string; note: string; }
@@ -143,6 +143,12 @@ export function GeneratorView() {
       url: genUrl, target: genTarget, lang: genLang,
       bypassCF: String(genBypassCF), provider, apiKey, model: model || "",
       moduleType: genLang === "nodejs" ? moduleType : "",
+      siteType:   genAnalysis?.ai?.site_type || "",
+      pageType:   "",
+      searchQuery: "",
+      selectors:  genAnalysis?.ai?.css_selectors?.selectors
+        ? JSON.stringify(genAnalysis.ai.css_selectors.selectors.map((s: string) => ({ category: "css", selector: s, label: s })))
+        : "",
     });
     const evtSrc = new EventSource(`/api/generate/stream?${params.toString()}`);
 
@@ -933,16 +939,30 @@ const CATEGORY_COLORS: Record<string,string> = {
 };
 
 const CATEGORY_LABELS: Record<string,string> = {
-  headings:   "Headings",
-  text:       "Teks",
-  links:      "Links",
-  images:     "Gambar",
-  tables:     "Tabel",
-  lists:      "List",
-  data:       "Data Element",
-  forms:      "Form",
-  meta:       "Meta/SEO",
-  structured: "Structured Data",
+  headings:       "Headings",
+  text:           "Teks",
+  links:          "Links",
+  images:         "Gambar",
+  tables:         "Tabel",
+  lists:          "List",
+  data:           "Data",
+  forms:          "Form",
+  meta:           "Meta/SEO",
+  structured:     "JSON-LD",
+  movies:         "🎬 Film/Video",
+  episodes:       "📺 Episode",
+  genres:         "🏷️ Genre",
+  latest:         "🆕 Terbaru",
+  search:         "🔍 Pencarian",
+  player:         "▶️ Player",
+  detail:         "📋 Detail",
+  pagination:     "📄 Paginasi",
+  products:       "🛍️ Produk",
+  prices:         "💰 Harga",
+  categories:     "🗂️ Kategori",
+  articles:       "📰 Artikel",
+  article_detail: "📝 Isi Artikel",
+  threads:        "💬 Thread",
 };
 
 interface Step0Props {
@@ -973,6 +993,19 @@ function Step0UrlPanel({
     ogImage: string|null; favicon: string|null; themeColor: string|null;
     siteName: string|null; layer: number; error: string|null;
   }|null>(null);
+  const [urlDetect,      setUrlDetect]      = useState<UrlDetectResult|null>(null);
+
+  // Instant URL detect on every valid URL change (debounced)
+  useEffect(() => {
+    if (!genUrl.trim().startsWith("http")) { setUrlDetect(null); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await detectUrl(genUrl.trim());
+        setUrlDetect(res);
+      } catch { setUrlDetect(null); }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [genUrl]);
 
   const handlePreview = async (urlToPreview: string) => {
     if (!urlToPreview.trim()) return;
@@ -1109,6 +1142,51 @@ function Step0UrlPanel({
             </div>
           )}
 
+          {/* ── Instant URL Detect Hint ── */}
+          {urlDetect && urlDetect.pageType !== "unknown" && urlDetect.pageType !== "general" && (
+            <div style={{
+              background:"rgba(46,255,168,.04)",border:"1px solid rgba(46,255,168,.18)",
+              borderRadius:10,padding:"10px 14px",display:"flex",flexDirection:"column",gap:8,
+            }}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                <Zap size={11} style={{color:"var(--neon)",flexShrink:0}}/>
+                <span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--neon)",textTransform:"uppercase",letterSpacing:1}}>
+                  Smart URL Detect
+                </span>
+                {urlDetect.platform && (
+                  <span className="badge badge-neon" style={{fontSize:9}}>{urlDetect.platform}</span>
+                )}
+                <span className="badge badge-neutral" style={{fontSize:9}}>{urlDetect.pageType}</span>
+              </div>
+              {urlDetect.hint && (
+                <p style={{fontSize:12,color:"var(--text2)",margin:0}}>{urlDetect.hint}</p>
+              )}
+              {urlDetect.suggestions && urlDetect.suggestions.length > 0 && (
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--muted)",textTransform:"uppercase",letterSpacing:1}}>
+                    Quick Scraper Suggestions — klik untuk isi target:
+                  </div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {urlDetect.suggestions.map((s, i) => (
+                      <button key={i} onClick={() => setGenTarget(s.desc)}
+                        title={s.desc}
+                        style={{
+                          display:"flex",alignItems:"center",gap:5,
+                          padding:"6px 11px",borderRadius:7,cursor:"pointer",
+                          background: genTarget===s.desc ? "rgba(46,255,168,.15)" : "rgba(0,0,0,.3)",
+                          border:`1px solid ${genTarget===s.desc ? "rgba(46,255,168,.4)" : "var(--border2)"}`,
+                          color: genTarget===s.desc ? "var(--neon)" : "var(--text2)",
+                          fontSize:11,transition:"all .15s",textAlign:"left",
+                        }}>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {/* Scan Elements — tidak butuh API key */}
             <button className="btn btn-primary" onClick={handleScan}
@@ -1205,20 +1283,54 @@ function Step0UrlPanel({
 
           {/* Site info */}
           <div style={{padding:"10px 18px",borderBottom:"1px solid var(--border)",
-            display:"flex",gap:16,alignItems:"center",background:"rgba(0,0,0,.2)"}}>
+            display:"flex",gap:16,alignItems:"center",background:"rgba(0,0,0,.2)",flexWrap:"wrap"}}>
             <div style={{display:"flex",alignItems:"center",gap:7}}>
               <Globe size={11} style={{color:"var(--muted)"}}/>
               <span style={{fontFamily:"var(--mono)",fontSize:11,color:"var(--neon2)"}}>{scanResult.host}</span>
             </div>
+            {scanResult.siteType && (
+              <span className="badge badge-neon" style={{fontSize:9,textTransform:"uppercase"}}>
+                {scanResult.siteType}
+              </span>
+            )}
+            {scanResult.pageHint && (
+              <span style={{fontSize:11,color:"var(--text2)",fontStyle:"italic"}}>{scanResult.pageHint}</span>
+            )}
             {scanResult.title && (
-              <span style={{fontSize:12,color:"var(--text2)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:320}}>
+              <span style={{fontSize:12,color:"var(--text2)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:280}}>
                 {scanResult.title}
               </span>
             )}
             <span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",marginLeft:"auto"}}>
-              Layer {scanResult.layer} — {scanResult.elementCount} elemen ditemukan
+              Layer {scanResult.layer} — {scanResult.elementCount} elemen
             </span>
           </div>
+
+          {/* Smart Scraper Suggestions — quick-pick cards */}
+          {scanResult.scraperSuggestions && scanResult.scraperSuggestions.length > 0 && (
+            <div style={{padding:"12px 16px",borderBottom:"1px solid var(--border)",
+              background:"rgba(46,255,168,.02)"}}>
+              <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--neon)",
+                textTransform:"uppercase",letterSpacing:1.5,marginBottom:8}}>
+                ⚡ Smart Suggestions — klik untuk langsung pakai sebagai target
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {scanResult.scraperSuggestions.map((s, i) => (
+                  <button key={i} onClick={() => setGenTarget(s.desc)}
+                    title={s.desc}
+                    style={{
+                      padding:"6px 12px",borderRadius:8,cursor:"pointer",
+                      background: genTarget===s.desc ? "rgba(46,255,168,.15)" : "rgba(0,0,0,.35)",
+                      border:`1px solid ${genTarget===s.desc ? "rgba(46,255,168,.45)" : "var(--border2)"}`,
+                      color: genTarget===s.desc ? "var(--neon)" : "var(--text2)",
+                      fontSize:11.5,transition:"all .15s",
+                    }}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div style={{display:"flex",height:"auto"}}>
             {/* Category tabs - left */}

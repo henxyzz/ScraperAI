@@ -31,7 +31,10 @@ export const validateKey = (provider: Provider, apiKey: string, model?: string) 
 
 // ── Prefetch / Element Scanner ────────────────────────────────
 export const prefetchUrl = (url: string) =>
-  api.post<import("./types").PrefetchResult>("/api/prefetch", { url }, { timeout: 18000 }).then(r => r.data);
+  api.post<import("./types").PrefetchResult>("/api/prefetch", { url }, { timeout: 60000 }).then(r => r.data);
+
+export const detectUrl = (url: string) =>
+  api.post<import("./types").UrlDetectResult>("/api/url-detect", { url }).then(r => r.data);
 
 export const previewUrl = (url: string) =>
   api.post<{

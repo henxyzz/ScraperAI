@@ -246,23 +246,52 @@ export interface C3SyncResult {
 
 // ── Prefetch / Element Scanner ────────────────────────────────
 export interface PrefetchElement {
-  category: "headings" | "text" | "links" | "images" | "tables" | "lists" | "data" | "forms" | "meta" | "structured";
+  category: string;
   label:    string;
   selector: string;
   preview:  string[];
   count:    number;
   target:   string;
+  priority?: number;
+}
+
+export interface ScraperSuggestion {
+  label: string;
+  desc:  string;
+}
+
+export interface SmartSelector {
+  category: string;
+  selector: string;
+  label:    string;
 }
 
 export interface PrefetchResult {
+  success:            boolean;
+  url:                string;
+  host:               string;
+  title:              string;
+  layer:              number;
+  siteType?:          string;
+  pageType?:          string;
+  platform?:          string | null;
+  pageHint?:          string | null;
+  searchQuery?:       string | null;
+  scraperSuggestions?: ScraperSuggestion[];
+  smartSelectors?:    SmartSelector[];
+  elementCount:       number;
+  categories:         string[];
+  elements:           PrefetchElement[];
+  error?:             string;
+  hint?:              string;
+}
+
+export interface UrlDetectResult {
   success:      boolean;
   url:          string;
-  host:         string;
-  title:        string;
-  layer:        number;
-  elementCount: number;
-  categories:   string[];
-  elements:     PrefetchElement[];
-  error?:       string;
+  pageType:     string;
+  platform?:    string;
   hint?:        string;
+  searchQuery?: string;
+  suggestions:  ScraperSuggestion[];
 }

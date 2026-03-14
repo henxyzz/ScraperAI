@@ -567,235 +567,45 @@ app.post("/api/prefetch", async (req, res) => {
     });
   }
 
-  // ── Parse elemen tanpa CSS ─────────────────────────────────
+  // ── Smart parse dengan context-aware element detection ─────
   try {
-    // Strip semua <style> dan style= attribute sebelum load
-    const cleanHtml = html
-      .replace(/<style[\s\S]*?<\/style>/gi, "")
-      .replace(/\s*style\s*=\s*["'][^"']*["']/gi, "")
-      .replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, "");
+    const $ = cheerio.load(html);
+    const siteType = detectSiteType(url, $, html);
+    const pageInfo = detectPageType(url);
+    const elements = detectSmartElements(url, $, html, siteType);
 
-    const $ = cheerio.load(cleanHtml);
+    // Merge scraper suggestions: URL-based + site-type based
+    const siteSuggestions = getScraperSuggestions(siteType, elements);
+    const urlSuggestions  = pageInfo.suggestions || [];
+    // URL-based suggestions are more specific — put them first
+    const allSuggestions  = [
+      ...urlSuggestions,
+      ...siteSuggestions.filter(s => !urlSuggestions.some(u => u.label === s.label)),
+    ].slice(0, 8);
 
-    // Hapus tag non-content
-    $("script, noscript, iframe, svg, canvas, video, audio, head, meta, link").remove();
+    const host  = (() => { try { return new URL(url).hostname.replace("www.", ""); } catch { return url; } })();
+    const title = (() => { try { return $("title").first().text().trim().substring(0, 100); } catch { return ""; } })();
 
-    const elements = [];
-
-    // ── Headings ────────────────────────────────────────────
-    ["h1","h2","h3"].forEach(tag => {
-      const items = [];
-      $(tag).each((_, el) => {
-        const txt = $(el).text().replace(/\s+/g," ").trim();
-        if (txt.length > 1 && txt.length < 200) items.push(txt);
-      });
-      if (items.length) {
-        elements.push({
-          category: "headings",
-          label:    `${tag.toUpperCase()} (${items.length})`,
-          selector: tag,
-          preview:  items.slice(0,3),
-          count:    items.length,
-          target:   `semua teks ${tag.toUpperCase()}: ${items.slice(0,2).join(" | ")}`,
-        });
-      }
-    });
-
-    // ── Paragraphs ──────────────────────────────────────────
-    const pItems = [];
-    $("p").each((_, el) => {
-      const txt = $(el).text().replace(/\s+/g," ").trim();
-      if (txt.length > 20) pItems.push(txt.substring(0,120));
-    });
-    if (pItems.length) {
-      elements.push({
-        category: "text",
-        label:    `Paragraf / Teks (${pItems.length})`,
-        selector: "p",
-        preview:  pItems.slice(0,3),
-        count:    pItems.length,
-        target:   "konten teks / paragraf lengkap",
-      });
-    }
-
-    // ── Links ───────────────────────────────────────────────
-    const links = [];
-    $("a[href]").each((_, el) => {
-      const href = $(el).attr("href") || "";
-      const txt  = $(el).text().replace(/\s+/g," ").trim();
-      if (href && !href.startsWith("#") && txt.length > 1) links.push({ text: txt.substring(0,80), href: href.substring(0,100) });
-    });
-    if (links.length) {
-      elements.push({
-        category: "links",
-        label:    `Link / URL (${links.length})`,
-        selector: "a[href]",
-        preview:  links.slice(0,3).map(l => `${l.text} → ${l.href}`),
-        count:    links.length,
-        target:   "semua link: teks link dan URL href",
-      });
-    }
-
-    // ── Images ──────────────────────────────────────────────
-    const imgs = [];
-    $("img").each((_, el) => {
-      const src = $(el).attr("src") || $(el).attr("data-src") || $(el).attr("data-lazy-src") || "";
-      const alt = $(el).attr("alt") || "";
-      if (src) imgs.push({ src: src.substring(0,100), alt: alt.substring(0,60) });
-    });
-    if (imgs.length) {
-      elements.push({
-        category: "images",
-        label:    `Gambar / Img (${imgs.length})`,
-        selector: "img",
-        preview:  imgs.slice(0,3).map(i => `${i.alt||"(no alt)"} | ${i.src}`),
-        count:    imgs.length,
-        target:   "semua gambar: URL src, alt text, data-src",
-      });
-    }
-
-    // ── Tables ──────────────────────────────────────────────
-    const tables = [];
-    $("table").each((i, tbl) => {
-      const headers = $(tbl).find("th").map((_, el) => $(el).text().trim()).get().filter(Boolean);
-      const rows    = $(tbl).find("tr").length;
-      tables.push({ headers: headers.slice(0,6), rows });
-    });
-    if (tables.length) {
-      elements.push({
-        category: "tables",
-        label:    `Tabel (${tables.length})`,
-        selector: "table",
-        preview:  tables.slice(0,2).map(t => `${t.rows} baris | ${t.headers.join(", ") || "(no headers)"}`),
-        count:    tables.length,
-        target:   "data tabel: header kolom dan semua baris data",
-      });
-    }
-
-    // ── Lists ───────────────────────────────────────────────
-    const listItems = [];
-    $("ul li, ol li").each((_, el) => {
-      const txt = $(el).text().replace(/\s+/g," ").trim();
-      if (txt.length > 2 && txt.length < 200) listItems.push(txt.substring(0,100));
-    });
-    if (listItems.length) {
-      elements.push({
-        category: "lists",
-        label:    `List Item / li (${listItems.length})`,
-        selector: "ul li, ol li",
-        preview:  listItems.slice(0,4),
-        count:    listItems.length,
-        target:   "semua item list (li) beserta teks kontennya",
-      });
-    }
-
-    // ── Class-based data elements ───────────────────────────
-    const classGroups = {};
-    const dataKeywords = [
-      "price","harga","cost","rate","rating","review","star","score",
-      "title","name","judul","nama","product","item","card","content",
-      "desc","description","detail","date","time","tanggal","author",
-      "category","tag","label","badge","stock","stok","qty","quantity",
-    ];
-    $("[class]").each((_, el) => {
-      const cls = $(el).attr("class") || "";
-      const tag = el.tagName;
-      cls.split(/\s+/).forEach(c => {
-        if (c.length < 3 || c.length > 50) return;
-        const lower = c.toLowerCase();
-        const matched = dataKeywords.find(k => lower.includes(k));
-        if (!matched) return;
-        if (!classGroups[matched]) classGroups[matched] = { classes: new Set(), texts: [], count: 0 };
-        classGroups[matched].classes.add(`.${c}`);
-        const txt = $(el).text().replace(/\s+/g," ").trim();
-        if (txt.length > 0 && txt.length < 150) {
-          classGroups[matched].texts.push(txt.substring(0,80));
-          classGroups[matched].count++;
-        }
-      });
-    });
-
-    Object.entries(classGroups).forEach(([keyword, data]) => {
-      if (data.count < 2) return;
-      const classes = [...data.classes].slice(0,4).join(", ");
-      elements.push({
-        category: "data",
-        label:    `${keyword.charAt(0).toUpperCase()+keyword.slice(1)} elements (${data.count})`,
-        selector: classes,
-        preview:  data.texts.slice(0,3),
-        count:    data.count,
-        target:   `${keyword}: element dengan class ${classes}`,
-      });
-    });
-
-    // ── Forms & Inputs ──────────────────────────────────────
-    const formInputs = [];
-    $("input[name], select[name], textarea[name]").each((_, el) => {
-      const name = $(el).attr("name") || $(el).attr("id") || "";
-      const type = $(el).attr("type") || el.tagName;
-      if (name) formInputs.push(`${type}[${name}]`);
-    });
-    if (formInputs.length) {
-      elements.push({
-        category: "forms",
-        label:    `Form Input (${formInputs.length})`,
-        selector: "input, select, textarea",
-        preview:  formInputs.slice(0,5),
-        count:    formInputs.length,
-        target:   "struktur form dan input fields: name, type, value",
-      });
-    }
-
-    // ── Meta / SEO ──────────────────────────────────────────
-    const metas = [];
-    $("meta").each((_, el) => {
-      const name    = $(el).attr("name") || $(el).attr("property") || "";
-      const content = $(el).attr("content") || "";
-      if (name && content && content.length > 2) metas.push(`${name}: ${content.substring(0,80)}`);
-    });
-    if (metas.length) {
-      elements.push({
-        category: "meta",
-        label:    `Meta / SEO (${metas.length})`,
-        selector: "meta",
-        preview:  metas.slice(0,4),
-        count:    metas.length,
-        target:   "meta tags: title, description, og:title, og:image, keywords",
-      });
-    }
-
-    // ── JSON-LD Structured Data ──────────────────────────────
-    const jsonLds = [];
-    $("script[type='application/ld+json']").each((_, el) => {
-      try {
-        const obj  = JSON.parse($(el).text().trim());
-        const type = obj["@type"] || "Unknown";
-        jsonLds.push(type);
-      } catch {}
-    });
-    if (jsonLds.length) {
-      elements.push({
-        category: "structured",
-        label:    `JSON-LD Structured Data (${jsonLds.length})`,
-        selector: "script[type='application/ld+json']",
-        preview:  jsonLds,
-        count:    jsonLds.length,
-        target:   `JSON-LD structured data: ${jsonLds.join(", ")}`,
-      });
-    }
-
-    // ── Final response ───────────────────────────────────────
-    const host  = (() => { try { return new URL(url).hostname.replace("www.",""); } catch { return url; } })();
-    const title = (() => { try { return $("title").first().text().trim().substring(0,100); } catch { return ""; } })();
+    const smartSelectors = elements
+      .filter(e => e.selector && e.selector !== "meta")
+      .slice(0, 6)
+      .map(e => ({ category: e.category, selector: e.selector, label: e.label }));
 
     res.json({
-      success:       true,
+      success:            true,
       url,
       host,
       title,
       layer,
-      elementCount:  elements.reduce((a,e)=>a+e.count, 0),
-      categories:    [...new Set(elements.map(e=>e.category))],
+      siteType,
+      pageType:           pageInfo.pageType,
+      platform:           pageInfo.platform || null,
+      pageHint:           pageInfo.hint || null,
+      searchQuery:        pageInfo.searchQuery || null,
+      scraperSuggestions: allSuggestions,
+      smartSelectors,
+      elementCount:       elements.reduce((a, e) => a + e.count, 0),
+      categories:         [...new Set(elements.map(e => e.category))],
       elements,
     });
   } catch (parseErr) {
@@ -807,7 +617,941 @@ app.post("/api/prefetch", async (req, res) => {
   }
 });
 
-// ── POST /api/preview ─────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+//  SMART URL PAGE TYPE DETECTOR
+//  Deteksi jenis halaman dari URL pattern sebelum fetch
+// ══════════════════════════════════════════════════════════════
+function detectPageType(urlStr) {
+  let parsed;
+  try { parsed = new URL(urlStr); } catch { return { pageType: "unknown", hints: [] }; }
+
+  const host    = parsed.hostname.toLowerCase().replace("www.", "");
+  const path    = parsed.pathname.toLowerCase();
+  const query   = parsed.searchParams;
+  const fullUrl = urlStr.toLowerCase();
+
+  // ── KNOWN DOMAINS ─────────────────────────────────────────
+  const knownDomains = {
+    // Social
+    "x.com": "twitter", "twitter.com": "twitter",
+    "instagram.com": "instagram", "tiktok.com": "tiktok",
+    "facebook.com": "facebook", "linkedin.com": "linkedin",
+    "youtube.com": "youtube", "reddit.com": "reddit",
+    // Ecommerce
+    "tokopedia.com": "ecommerce", "shopee.co.id": "ecommerce",
+    "lazada.co.id": "ecommerce", "blibli.com": "ecommerce",
+    "amazon.com": "ecommerce", "bukalapak.com": "ecommerce",
+    // News
+    "kompas.com": "news", "detik.com": "news", "tribunnews.com": "news",
+    "cnbcindonesia.com": "news", "liputan6.com": "news",
+    "kumparan.com": "news", "tempo.co": "news",
+    // Jobs
+    "linkedin.com/jobs": "jobs", "jobstreet.co.id": "jobs",
+    "glints.com": "jobs", "kalibrr.com": "jobs",
+  };
+
+  for (const [d, type] of Object.entries(knownDomains)) {
+    if (host.includes(d) || fullUrl.includes(d)) {
+      return detectSocialPageType(type, parsed);
+    }
+  }
+
+  return detectGenericPageType(parsed);
+}
+
+function detectSocialPageType(domain, parsed) {
+  const path  = parsed.pathname.toLowerCase();
+  const query = parsed.searchParams;
+  const host  = parsed.hostname.toLowerCase();
+
+  // ── TWITTER / X ───────────────────────────────────────────
+  if (domain === "twitter") {
+    if (query.has("q") || path.includes("/search")) {
+      const q = query.get("q") || "";
+      return {
+        pageType: "search",
+        platform: "twitter",
+        searchQuery: q,
+        suggestions: [
+          { label: "🔍 Hasil Pencarian Tweet", desc: `Scrape tweet hasil pencarian "${q || "query"}" — teks, user, likes, retweets, tanggal` },
+          { label: "📊 Trending Topics", desc: "Scrape topik trending dari hasil search — hashtag, jumlah tweet" },
+          { label: "👤 User dari Hasil Search", desc: "Kumpulkan profil user yang muncul di hasil pencarian" },
+        ],
+        hint: query.has("q") ? `Pencarian Twitter/X untuk: "${q}"` : "Halaman search Twitter/X",
+      };
+    }
+    if (path.match(/^\/[^/]+\/status\/\d+/)) {
+      return {
+        pageType: "post",
+        platform: "twitter",
+        suggestions: [
+          { label: "🐦 Detail Tweet", desc: "Scrape tweet: teks lengkap, user, likes, retweets, replies, tanggal, media" },
+          { label: "💬 Semua Reply/Komentar", desc: "Kumpulkan semua balasan dari thread tweet ini" },
+        ],
+        hint: "Halaman detail tweet/post",
+      };
+    }
+    if (path.includes("/trending") || path.includes("/explore")) {
+      return {
+        pageType: "trending",
+        platform: "twitter",
+        suggestions: [
+          { label: "🔥 Trending Topics", desc: "Scrape semua topik trending: hashtag, jumlah tweet, kategori" },
+          { label: "💡 Trending News", desc: "Kumpulkan berita trending yang sedang ramai dibahas" },
+        ],
+        hint: "Halaman trending/explore Twitter",
+      };
+    }
+    if (path.match(/^\/[^/]+\/followers/) || path.match(/^\/[^/]+\/following/)) {
+      return {
+        pageType: "followers",
+        platform: "twitter",
+        suggestions: [
+          { label: "👥 Daftar Followers/Following", desc: "Scrape daftar followers/following: username, nama, bio, verified status" },
+        ],
+        hint: "Halaman followers/following",
+      };
+    }
+    if (path.match(/^\/[^/]+$/) && path.length > 1) {
+      const username = path.replace("/", "");
+      return {
+        pageType: "profile",
+        platform: "twitter",
+        suggestions: [
+          { label: `📋 Semua Tweet @${username}`, desc: "Scrape timeline tweet: teks, tanggal, likes, retweets, media URL" },
+          { label: `👤 Profil @${username}`, desc: "Scrape info profil: nama, bio, followers, following, lokasi, join date" },
+          { label: "📌 Pinned Tweet", desc: "Ambil tweet yang di-pin + semua tweet terbaru" },
+        ],
+        hint: `Profil Twitter/X: @${username}`,
+      };
+    }
+    return {
+      pageType: "home",
+      platform: "twitter",
+      suggestions: [
+        { label: "🏠 Tweet dari Home Timeline", desc: "Scrape tweet dari feed utama — teks, user, engagement" },
+        { label: "🔥 Trending Saat Ini", desc: "Scrape topik trending di sidebar kanan" },
+      ],
+      hint: "Halaman utama Twitter/X (home feed)",
+    };
+  }
+
+  // ── INSTAGRAM ─────────────────────────────────────────────
+  if (domain === "instagram") {
+    if (query.has("q") || path.includes("/explore/search")) {
+      const q = query.get("q") || "";
+      return {
+        pageType: "search", platform: "instagram",
+        suggestions: [
+          { label: "🔍 Hasil Pencarian Instagram", desc: `Cari akun/hashtag/tempat: "${q || "query"}"` },
+          { label: "#️⃣ Hasil Hashtag", desc: "Scrape post dari hashtag tertentu: gambar, caption, likes, komentar" },
+        ],
+        hint: `Pencarian Instagram: "${q}"`,
+      };
+    }
+    if (path.includes("/explore")) {
+      return {
+        pageType: "explore", platform: "instagram",
+        suggestions: [
+          { label: "🔥 Post Trending/Explore", desc: "Scrape post populer dari halaman Explore: gambar, likes, user" },
+          { label: "#️⃣ Explore by Hashtag", desc: "Kumpulkan post berdasarkan hashtag trending" },
+        ],
+        hint: "Halaman Explore Instagram",
+      };
+    }
+    if (path.match(/^\/p\//) || path.match(/^\/reel\//)) {
+      return {
+        pageType: "post", platform: "instagram",
+        suggestions: [
+          { label: "📸 Detail Post/Reel", desc: "Scrape detail post: caption, likes, komentar, user, media URL, tanggal" },
+          { label: "💬 Semua Komentar", desc: "Kumpulkan semua komentar beserta username dan likes komentar" },
+        ],
+        hint: "Halaman detail post Instagram",
+      };
+    }
+    if (path.match(/^\/[^/]+\/?$/)) {
+      const username = path.replace(/\//g, "");
+      return {
+        pageType: "profile", platform: "instagram",
+        suggestions: [
+          { label: `📸 Semua Post @${username}`, desc: "Scrape grid post: URL gambar, caption, likes, komentar count, tanggal" },
+          { label: `👤 Profil @${username}`, desc: "Scrape info profil: nama, bio, followers, following, jumlah post" },
+          { label: "🎬 Semua Reels", desc: "Kumpulkan semua Reels dari profil ini" },
+        ],
+        hint: `Profil Instagram: @${username}`,
+      };
+    }
+  }
+
+  // ── TIKTOK ─────────────────────────────────────────────────
+  if (domain === "tiktok") {
+    if (query.has("q") || path.includes("/search")) {
+      const q = query.get("q") || "";
+      return {
+        pageType: "search", platform: "tiktok",
+        suggestions: [
+          { label: "🔍 Video dari Search TikTok", desc: `Scrape video hasil pencarian "${q}" — judul, views, likes, link` },
+          { label: "👤 User dari Search", desc: "Kumpulkan profil TikToker dari hasil pencarian" },
+        ],
+        hint: `Pencarian TikTok: "${q}"`,
+      };
+    }
+    if (path.includes("/foryou") || path === "/" || path === "") {
+      return {
+        pageType: "home", platform: "tiktok",
+        suggestions: [
+          { label: "🔥 Video For You / Trending", desc: "Scrape video trending FYP: judul, creator, likes, share, sound" },
+          { label: "🏷️ Trending Hashtag", desc: "Kumpulkan hashtag yang sedang trending beserta jumlah video" },
+        ],
+        hint: "Halaman utama TikTok (For You Page)",
+      };
+    }
+    if (path.match(/^\/tag\//)) {
+      const tag = path.replace("/tag/", "");
+      return {
+        pageType: "hashtag", platform: "tiktok",
+        suggestions: [
+          { label: `#️⃣ Video Hashtag #${tag}`, desc: `Scrape semua video dengan hashtag #${tag}: views, likes, creator` },
+        ],
+        hint: `Halaman hashtag TikTok: #${tag}`,
+      };
+    }
+    if (path.match(/^\/@[^/]+\/?$/)) {
+      const username = path.replace("/@", "").replace("/", "");
+      return {
+        pageType: "profile", platform: "tiktok",
+        suggestions: [
+          { label: `🎬 Semua Video @${username}`, desc: "Scrape daftar video: judul/caption, views, likes, komentar, tanggal, link" },
+          { label: `👤 Profil @${username}`, desc: "Scrape info profil: nama, bio, followers, following, total likes" },
+        ],
+        hint: `Profil TikTok: @${username}`,
+      };
+    }
+  }
+
+  // ── YOUTUBE ────────────────────────────────────────────────
+  if (domain === "youtube") {
+    if (query.has("search_query")) {
+      const q = query.get("search_query") || "";
+      return {
+        pageType: "search", platform: "youtube",
+        suggestions: [
+          { label: `🔍 Video dari Search "${q}"`, desc: "Scrape hasil pencarian: judul, channel, views, durasi, tanggal, link" },
+          { label: "📺 Channel dari Search", desc: "Kumpulkan channel YouTube yang muncul di hasil pencarian" },
+        ],
+        hint: `Pencarian YouTube: "${q}"`,
+      };
+    }
+    if (query.has("v")) {
+      return {
+        pageType: "video", platform: "youtube",
+        suggestions: [
+          { label: "▶️ Detail Video YouTube", desc: "Scrape info video: judul, channel, views, likes, deskripsi, tanggal upload" },
+          { label: "💬 Semua Komentar", desc: "Kumpulkan komentar: teks, user, likes komentar, tanggal" },
+        ],
+        hint: `Halaman video YouTube: ${query.get("v")}`,
+      };
+    }
+    if (path.startsWith("/trending") || path.startsWith("/feed/trending")) {
+      return {
+        pageType: "trending", platform: "youtube",
+        suggestions: [
+          { label: "🔥 Video Trending YouTube", desc: "Scrape video trending: judul, channel, views, ranking" },
+        ],
+        hint: "Halaman Trending YouTube",
+      };
+    }
+    if (path.match(/^\/(c\/|channel\/|@)/)) {
+      return {
+        pageType: "channel", platform: "youtube",
+        suggestions: [
+          { label: "📺 Semua Video Channel", desc: "Scrape daftar video: judul, views, tanggal, durasi, link" },
+          { label: "👤 Info Channel", desc: "Scrape detail channel: nama, deskripsi, subscribers, jumlah video" },
+          { label: "📋 Playlist Channel", desc: "Kumpulkan semua playlist yang ada di channel ini" },
+        ],
+        hint: "Halaman channel YouTube",
+      };
+    }
+  }
+
+  // ── REDDIT ─────────────────────────────────────────────────
+  if (domain === "reddit") {
+    if (query.has("q") || path.includes("/search")) {
+      const q = query.get("q") || "";
+      return {
+        pageType: "search", platform: "reddit",
+        suggestions: [
+          { label: `🔍 Post dari Search "${q}"`, desc: "Scrape hasil pencarian Reddit: judul, subreddit, upvotes, komentar, link" },
+        ],
+        hint: `Pencarian Reddit: "${q}"`,
+      };
+    }
+    if (path.match(/^\/r\/[^/]+\/comments\//)) {
+      return {
+        pageType: "post", platform: "reddit",
+        suggestions: [
+          { label: "📝 Detail Post Reddit", desc: "Scrape post: judul, isi, upvotes, awards, subreddit, user" },
+          { label: "💬 Semua Komentar", desc: "Kumpulkan thread komentar: user, teks, upvotes, nested replies" },
+        ],
+        hint: "Halaman detail post Reddit",
+      };
+    }
+    if (path.match(/^\/r\/[^/]+\/?$/)) {
+      const sub = path.replace(/\//g, " ").trim().split(" ").pop();
+      return {
+        pageType: "subreddit", platform: "reddit",
+        suggestions: [
+          { label: `📋 Post Terbaru r/${sub}`, desc: "Scrape daftar post: judul, upvotes, komentar count, user, tanggal, link" },
+          { label: `🔥 Post Hot/Top r/${sub}`, desc: "Ambil post terpopuler dari subreddit ini" },
+          { label: "ℹ️ Info Subreddit", desc: "Scrape deskripsi, subscribers, rules, moderators" },
+        ],
+        hint: `Subreddit: r/${sub}`,
+      };
+    }
+  }
+
+  // ── ECOMMERCE ──────────────────────────────────────────────
+  if (domain === "ecommerce") {
+    if (query.has("q") || query.has("search") || query.has("keyword") || path.includes("/search")) {
+      const q = query.get("q") || query.get("search") || query.get("keyword") || "";
+      return {
+        pageType: "search", platform: "ecommerce",
+        suggestions: [
+          { label: `🔍 Produk "${q}"`, desc: `Scrape hasil pencarian produk "${q}": nama, harga, rating, toko, link` },
+          { label: "💰 Harga Terendah-Tertinggi", desc: "Bandingkan harga semua produk di hasil pencarian" },
+        ],
+        hint: `Pencarian produk: "${q}"`,
+      };
+    }
+    if (path.includes("/category") || path.includes("/kategori") || path.includes("/c/")) {
+      return {
+        pageType: "category", platform: "ecommerce",
+        suggestions: [
+          { label: "🗂️ Semua Produk Kategori", desc: "Scrape semua produk dalam kategori ini: nama, harga, rating, gambar" },
+          { label: "📄 Multi-halaman", desc: "Scrape semua halaman kategori dengan auto-pagination" },
+        ],
+        hint: "Halaman kategori produk",
+      };
+    }
+    if (path.includes("/product") || path.includes("/p/") || path.includes("/item/")) {
+      return {
+        pageType: "product_detail", platform: "ecommerce",
+        suggestions: [
+          { label: "📦 Detail Produk Lengkap", desc: "Scrape semua info: nama, harga, stok, deskripsi, spesifikasi, gambar, seller" },
+          { label: "⭐ Review & Rating", desc: "Kumpulkan semua review: bintang, komentar, foto review, tanggal" },
+        ],
+        hint: "Halaman detail produk",
+      };
+    }
+  }
+
+  return detectGenericPageType(parsed);
+}
+
+function detectGenericPageType(parsed) {
+  const path  = parsed.pathname.toLowerCase();
+  const query = parsed.searchParams;
+  const host  = parsed.hostname.toLowerCase().replace("www.", "");
+
+  // Generic search page
+  const searchParams = ["q", "query", "search", "s", "keyword", "k", "term", "find", "cari"];
+  const foundSearchParam = searchParams.find(p => query.has(p));
+  if (foundSearchParam) {
+    const q = query.get(foundSearchParam) || "";
+    return {
+      pageType: "search",
+      searchQuery: q,
+      searchParam: foundSearchParam,
+      suggestions: [
+        { label: `🔍 Hasil Pencarian "${q}"`, desc: `Scrape semua hasil pencarian untuk query "${q}" dari ${host}` },
+        { label: "📄 Multi-halaman Hasil Search", desc: "Scrape hasil search di semua halaman dengan auto-pagination" },
+        { label: "🔗 Link dari Hasil Search", desc: "Kumpulkan semua URL hasil pencarian untuk di-crawl lebih lanjut" },
+      ],
+      hint: `Halaman hasil pencarian: "${q}" (param: ${foundSearchParam})`,
+    };
+  }
+
+  // Pagination/category page
+  const pageParam = ["page", "p", "hal", "pg"].find(p => query.has(p));
+  if (pageParam) {
+    const pageNum = query.get(pageParam);
+    return {
+      pageType: "paginated",
+      suggestions: [
+        { label: "📄 Scrape Halaman Ini", desc: `Scrape konten halaman ${pageNum} saat ini` },
+        { label: "📚 Scrape Semua Halaman", desc: "Auto-pagination: scrape dari halaman 1 sampai selesai" },
+      ],
+      hint: `Halaman paginasi (halaman ${pageNum})`,
+    };
+  }
+
+  // Detail page (URL dengan ID/slug)
+  if (path.match(/\/\d+/) || path.match(/\/[a-z0-9-]{8,}\/$/)) {
+    return {
+      pageType: "detail",
+      suggestions: [
+        { label: "📋 Konten Detail Halaman", desc: "Scrape semua konten dari halaman detail ini" },
+        { label: "🔗 Link Terkait", desc: "Kumpulkan link ke halaman terkait/related content" },
+      ],
+      hint: "Kemungkinan halaman detail (ada ID/slug di URL)",
+    };
+  }
+
+  // Homepage
+  if (path === "/" || path === "") {
+    return {
+      pageType: "home",
+      suggestions: [
+        { label: "🏠 Konten Halaman Utama", desc: `Scrape konten utama homepage ${host}` },
+        { label: "🔗 Semua Link Navigasi", desc: "Kumpulkan struktur navigasi dan link penting di homepage" },
+        { label: "📢 Konten Featured/Banner", desc: "Scrape konten yang di-highlight di halaman utama" },
+      ],
+      hint: `Homepage: ${host}`,
+    };
+  }
+
+  return { pageType: "general", suggestions: [], hint: "" };
+}
+
+
+function detectSiteType(url, $, htmlRaw) {
+  const host  = (() => { try { return new URL(url).hostname.toLowerCase(); } catch { return url.toLowerCase(); } })();
+  const title = $("title").first().text().toLowerCase();
+  const meta  = ($("meta[name='description']").attr("content") || "").toLowerCase();
+  const bodyTxt = ($("body").text() || "").toLowerCase().substring(0, 8000);
+  const allText = `${host} ${title} ${meta} ${bodyTxt}`;
+  const htmlLow = (htmlRaw || "").substring(0, 30000).toLowerCase();
+  const ogType  = ($("meta[property='og:type']").attr("content") || "").toLowerCase();
+
+  const score = { streaming:0, ecommerce:0, news:0, forum:0, jobs:0, social:0, general:0 };
+
+  // ── Streaming / Film ─────────────────────────────────────────
+  ["nonton","streaming","film","movie","series","episode","anime","drama","subtitle",
+   "cinema","rebahin","lk21","indoxxi","loklok","ganool","subscene","watch online",
+   "download film","sinopsis","trailer","season","episodes","imdb"].forEach(k => {
+    if (allText.includes(k)) score.streaming += 2;
+  });
+  if ($("[class*='movie'],[class*='film'],[class*='episode'],[class*='poster'],[class*='series']").length > 2) score.streaming += 6;
+  if (ogType.includes("video") || ogType.includes("movie")) score.streaming += 10;
+  if (/nonton|streaming|film|movie|episode|anime/i.test(host)) score.streaming += 8;
+
+  // ── Ecommerce ────────────────────────────────────────────────
+  ["harga","price","cart","keranjang","checkout","beli","buy","produk","product",
+   "tokopedia","shopee","lazada","blibli","amazon","toko","shop","store","diskon"].forEach(k => {
+    if (allText.includes(k)) score.ecommerce += 2;
+  });
+  if ($("[class*='product'],[class*='price'],[class*='cart'],[class*='shop']").length > 2) score.ecommerce += 6;
+  if (ogType.includes("product")) score.ecommerce += 10;
+
+  // ── News / Blog ──────────────────────────────────────────────
+  ["berita","news","artikel","article","headline","reporter","redaksi","publish",
+   "kompas","detik","tribun","cnbc","liputan","kumparan","tirto","tempo","republika"].forEach(k => {
+    if (allText.includes(k)) score.news += 2;
+  });
+  if ($("article,.article,.post,.news-item,.news-card").length > 2) score.news += 6;
+  if (ogType.includes("article")) score.news += 10;
+
+  // ── Forum ────────────────────────────────────────────────────
+  ["forum","thread","reply","diskusi","discussion","kaskus","topik","subforum"].forEach(k => {
+    if (allText.includes(k)) score.forum += 2;
+  });
+  if ($(".thread,.post,.reply,.forum-item").length > 2) score.forum += 6;
+
+  // ── Social ───────────────────────────────────────────────────
+  ["followers","following","likes","retweet","post","tweet","profile","feed"].forEach(k => {
+    if (allText.includes(k)) score.social += 2;
+  });
+
+  // ── Jobs ─────────────────────────────────────────────────────
+  ["lowongan","kerja","job","vacancy","career","hiring","loker","gaji","salary"].forEach(k => {
+    if (allText.includes(k)) score.jobs += 2;
+  });
+
+  const best = Object.entries(score).sort((a, b) => b[1] - a[1])[0];
+  return best[1] >= 3 ? best[0] : "general";
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SMART ELEMENT DETECTOR — Context-aware per site type
+// ══════════════════════════════════════════════════════════════
+function detectSmartElements(url, $, htmlRaw, siteType) {
+  const elements = [];
+  const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
+
+  // ── Helper: find best repeating card selector ──────────────
+  function findCardSelector(patterns) {
+    for (const sel of patterns) {
+      try {
+        const count = $(sel).length;
+        if (count >= 3) return { sel, count };
+      } catch {}
+    }
+    return null;
+  }
+
+  function extractCardData(sel, maxItems = 5) {
+    const samples = [];
+    $(sel).slice(0, maxItems).each((_, el) => {
+      const title  = $(el).find("h1,h2,h3,h4,[class*='title'],[class*='name'],[class*='judul']").first().text().trim();
+      const img    = $(el).find("img").first().attr("src") || $(el).find("img").first().attr("data-src") || "";
+      const link   = $(el).find("a[href]").first().attr("href") || "";
+      const rating = $(el).find("[class*='rating'],[class*='imdb'],[class*='score'],[class*='vote']").first().text().trim();
+      const year   = $(el).find("[class*='year'],[class*='tahun']").first().text().trim() ||
+                     (title.match(/\((\d{4})\)/) || [])[1] || "";
+      const info   = [title, year, rating].filter(Boolean).join(" | ");
+      if (info.length > 2) samples.push(info.substring(0, 120));
+    });
+    return samples;
+  }
+
+  // ── STREAMING SITE ──────────────────────────────────────────
+  if (siteType === "streaming") {
+    // 1. Movie/video card list
+    const cardPatterns = [
+      "[class*='movie-item']","[class*='film-item']","[class*='video-item']",
+      "[class*='movie-card']","[class*='film-card']","[class*='video-card']",
+      "[class*='movie_item']","[class*='film_item']",
+      "[class*='post-item']","[class*='item-film']",
+      ".movies li","#movies li",".film-list li",
+      "[class*='grid'] article","[class*='list'] article",
+      "article[class*='movie']","article[class*='film']",
+      ".content-film li", ".daftar-film li",
+      "ul.film > li", "ul.movies > li",
+      // Fallback: any repeating article/li with poster image
+      ".main li:has(img)", ".content li:has(img)",
+    ];
+    const card = findCardSelector(cardPatterns);
+    if (card) {
+      const samples = extractCardData(card.sel);
+      const selShort = card.sel.substring(0, 50);
+      elements.push({
+        category: "movies",
+        label: `Daftar Film/Video (${card.count} item)`,
+        selector: card.sel,
+        preview: samples.length ? samples : [`${card.count} kartu film ditemukan`],
+        count: card.count,
+        target: `daftar film/video: judul, tahun, poster URL, rating, link detail — selector: ${selShort}`,
+        priority: 10,
+      });
+    }
+
+    // 2. Series/Episode list
+    const epPatterns = [
+      "[class*='episode']","[class*='eps']","[class*='season']",
+      ".episode-list li","#episode li","[class*='list-eps']",
+      "[class*='episode_list']","[class*='episodelist']",
+    ];
+    const ep = findCardSelector(epPatterns);
+    if (ep) {
+      const samples = [];
+      $(ep.sel).slice(0, 5).each((_, el) => {
+        const txt = $(el).text().replace(/\s+/g, " ").trim().substring(0, 100);
+        if (txt.length > 2) samples.push(txt);
+      });
+      elements.push({
+        category: "episodes",
+        label: `Daftar Episode (${ep.count} episode)`,
+        selector: ep.sel,
+        preview: samples,
+        count: ep.count,
+        target: `daftar episode: nomor episode, judul episode, link streaming — selector: ${ep.sel.substring(0, 50)}`,
+        priority: 9,
+      });
+    }
+
+    // 3. Genre / Category navigation
+    const genrePatterns = [
+      "[class*='genre'] a","[class*='category'] a","[class*='kategori'] a",
+      "nav a[href*='genre']","nav a[href*='category']","a[href*='/genre/']",
+      "[class*='genre-list'] a","[class*='cat-list'] a",
+    ];
+    const genres = [];
+    for (const sel of genrePatterns) {
+      try {
+        $(sel).slice(0, 10).each((_, el) => {
+          const txt = $(el).text().trim();
+          if (txt.length > 1 && txt.length < 40) genres.push(txt);
+        });
+        if (genres.length >= 3) break;
+      } catch {}
+    }
+    if (genres.length >= 2) {
+      elements.push({
+        category: "genres",
+        label: `Genre / Kategori (${genres.length} genre)`,
+        selector: genrePatterns.find(s => { try { return $(s).length >= 2; } catch { return false; } }) || "nav a",
+        preview: genres.slice(0, 5),
+        count: genres.length,
+        target: `daftar genre/kategori: nama genre dan URL linknya`,
+        priority: 7,
+      });
+    }
+
+    // 4. Latest / Featured section
+    const latestPatterns = [
+      "[class*='latest']","[class*='terbaru']","[class*='recent']","[class*='new']",
+      "[class*='featured']","[class*='trending']","[class*='popular']","[class*='populer']",
+      "#latest","#terbaru","#featured","#trending",
+    ];
+    for (const sel of latestPatterns) {
+      try {
+        const el = $(sel).first();
+        if (!el.length) continue;
+        const items = el.find("a[href]");
+        if (items.length >= 3) {
+          const samples = [];
+          items.slice(0, 5).each((_, a) => {
+            const txt = $(a).text().trim();
+            if (txt.length > 1) samples.push(txt.substring(0, 80));
+          });
+          elements.push({
+            category: "latest",
+            label: `Film/Video Terbaru (${items.length} item)`,
+            selector: sel,
+            preview: samples,
+            count: items.length,
+            target: `film/video terbaru: judul, URL detail, poster, tahun rilis`,
+            priority: 8,
+          });
+          break;
+        }
+      } catch {}
+    }
+
+    // 5. Search functionality
+    const searchInput = $("input[name*='search'],input[name*='s'],input[placeholder*='cari'],input[placeholder*='search'],input[type='search']").first();
+    if (searchInput.length) {
+      const formAction = searchInput.closest("form").attr("action") || "";
+      elements.push({
+        category: "search",
+        label: `Fungsi Pencarian`,
+        selector: "input[type='search'], form[role='search']",
+        preview: [`Form pencarian ditemukan${formAction ? ` — action: ${formAction}` : ""}`],
+        count: 1,
+        target: `scraper pencarian: kirim query ke form search, ambil hasil pencarian`,
+        priority: 6,
+      });
+    }
+
+    // 6. Video player / embed URL
+    const playerPatterns = [
+      "iframe[src*='player']","iframe[src*='embed']","iframe[src*='video']",
+      "[class*='player']","[class*='embed']","video[src]","video source[src]",
+      "[data-src*='player']","[data-embed]",
+    ];
+    for (const sel of playerPatterns) {
+      try {
+        const el = $(sel).first();
+        if (el.length) {
+          const src = el.attr("src") || el.attr("data-src") || "(embedded)";
+          elements.push({
+            category: "player",
+            label: `Video Player / Embed`,
+            selector: sel,
+            preview: [`Embed URL: ${src.substring(0, 100)}`],
+            count: 1,
+            target: `URL embed video player, source video, link streaming langsung`,
+            priority: 9,
+          });
+          break;
+        }
+      } catch {}
+    }
+
+    // 7. Film detail page detection
+    const synopsisPatterns = [
+      "[class*='synopsis'],[class*='sinopsis']","[class*='description'],[class*='deskripsi']",
+      "[class*='detail'] p","[class*='overview']",".entry-content p",
+    ];
+    for (const sel of synopsisPatterns) {
+      try {
+        const el = $(sel).first();
+        if (el.length && el.text().trim().length > 50) {
+          const detailFields = [];
+          const infoPatterns = ["[class*='genre']","[class*='year'],[class*='tahun']","[class*='director'],[class*='sutradara']",
+            "[class*='cast'],[class*='pemain']","[class*='rating'],[class*='imdb']","[class*='duration'],[class*='durasi']"];
+          infoPatterns.forEach(p => { try { if ($(p).length) detailFields.push(p); } catch {} });
+          elements.push({
+            category: "detail",
+            label: `Detail Film/Video`,
+            selector: "[class*='detail'],[class*='single'],[class*='post-content']",
+            preview: [
+              el.text().trim().substring(0, 120) + "…",
+              ...(detailFields.length ? [`Field: ${detailFields.slice(0,3).join(", ")}`] : []),
+            ],
+            count: 1,
+            target: `detail film lengkap: sinopsis, genre, tahun, sutradara, pemain, rating IMDB, durasi, poster`,
+            priority: 8,
+          });
+          break;
+        }
+      } catch {}
+    }
+
+  // ── ECOMMERCE SITE ──────────────────────────────────────────
+  } else if (siteType === "ecommerce") {
+    const cardPatterns = [
+      "[class*='product-item']","[class*='product-card']","[class*='product_item']",
+      "[class*='item-product']",".products li",".product-list li",
+      "[class*='grid'] [class*='product']","[class*='card']",
+    ];
+    const card = findCardSelector(cardPatterns);
+    if (card) {
+      const samples = [];
+      $(card.sel).slice(0, 5).each((_, el) => {
+        const name  = $(el).find("[class*='name'],[class*='title'],[class*='product-name']").first().text().trim();
+        const price = $(el).find("[class*='price'],[class*='harga']").first().text().trim();
+        const info  = [name, price].filter(Boolean).join(" — ");
+        if (info.length > 2) samples.push(info.substring(0, 100));
+      });
+      elements.push({
+        category: "products",
+        label: `Daftar Produk (${card.count} item)`,
+        selector: card.sel,
+        preview: samples.length ? samples : [`${card.count} produk ditemukan`],
+        count: card.count,
+        target: `daftar produk: nama produk, harga, rating, gambar, link detail`,
+        priority: 10,
+      });
+    }
+    // Price elements
+    const prices = [];
+    $("[class*='price'],[class*='harga']").slice(0, 8).each((_, el) => {
+      const txt = $(el).text().trim();
+      if (txt.length > 0 && txt.length < 50) prices.push(txt);
+    });
+    if (prices.length >= 2) {
+      elements.push({
+        category: "prices",
+        label: `Harga Produk (${prices.length} harga)`,
+        selector: "[class*='price'],[class*='harga']",
+        preview: prices.slice(0, 4),
+        count: prices.length,
+        target: `harga produk: harga normal, harga diskon, persentase diskon`,
+        priority: 9,
+      });
+    }
+    // Categories
+    const cats = [];
+    $("[class*='category'] a,[class*='kategori'] a,nav[class*='cat'] a").slice(0, 10).each((_, el) => {
+      const txt = $(el).text().trim();
+      if (txt.length > 1 && txt.length < 50) cats.push(txt);
+    });
+    if (cats.length >= 2) {
+      elements.push({
+        category: "categories",
+        label: `Kategori (${cats.length})`,
+        selector: "[class*='category'] a,[class*='kategori'] a",
+        preview: cats.slice(0, 5),
+        count: cats.length,
+        target: `daftar kategori produk dengan nama dan URL link`,
+        priority: 7,
+      });
+    }
+
+  // ── NEWS SITE ───────────────────────────────────────────────
+  } else if (siteType === "news") {
+    const cardPatterns = [
+      "article","[class*='article-item']","[class*='news-item']","[class*='post-item']",
+      "[class*='card-news']","[class*='news-card']",".list-news li",".articles li",
+    ];
+    const card = findCardSelector(cardPatterns);
+    if (card) {
+      const samples = [];
+      $(card.sel).slice(0, 5).each((_, el) => {
+        const title = $(el).find("h1,h2,h3,h4,[class*='title']").first().text().trim();
+        const date  = $(el).find("[class*='date'],[class*='time'],time").first().text().trim();
+        const info  = [title, date].filter(Boolean).join(" | ");
+        if (info.length > 2) samples.push(info.substring(0, 120));
+      });
+      elements.push({
+        category: "articles",
+        label: `Daftar Artikel (${card.count} artikel)`,
+        selector: card.sel,
+        preview: samples.length ? samples : [`${card.count} artikel ditemukan`],
+        count: card.count,
+        target: `daftar artikel/berita: judul, tanggal publish, penulis, kategori, link, thumbnail`,
+        priority: 10,
+      });
+    }
+    // Article detail
+    const content = $("article .content, .article-body, .post-content, [class*='article-content']").first();
+    if (content.length && content.text().trim().length > 100) {
+      elements.push({
+        category: "article_detail",
+        label: `Isi Artikel Lengkap`,
+        selector: "article, .article-body, .post-content",
+        preview: [content.text().trim().substring(0, 150) + "…"],
+        count: 1,
+        target: `detail artikel: judul, isi lengkap, penulis, tanggal, kategori, gambar`,
+        priority: 9,
+      });
+    }
+
+  // ── FORUM ───────────────────────────────────────────────────
+  } else if (siteType === "forum") {
+    const threadPatterns = [
+      "[class*='thread']","[class*='topic']","[class*='post']",
+      ".thread-list li",".forum-list li",
+    ];
+    const card = findCardSelector(threadPatterns);
+    if (card) {
+      const samples = [];
+      $(card.sel).slice(0, 5).each((_, el) => {
+        const txt = $(el).find("h1,h2,h3,[class*='title']").first().text().trim() ||
+                    $(el).text().replace(/\s+/g, " ").trim();
+        if (txt.length > 2) samples.push(txt.substring(0, 100));
+      });
+      elements.push({
+        category: "threads",
+        label: `Daftar Thread/Topik (${card.count})`,
+        selector: card.sel,
+        preview: samples,
+        count: card.count,
+        target: `daftar thread: judul topik, penulis, jumlah balasan, tanggal, link`,
+        priority: 10,
+      });
+    }
+  }
+
+  // ── UNIVERSAL ELEMENTS (semua site type) ─────────────────────
+  // Pagination
+  const pagePatterns = ["[class*='pagination']","[class*='paging']","[class*='page-nav']",
+    "nav[aria-label*='page']",".wp-pagenavi","[class*='nextpage']"];
+  for (const sel of pagePatterns) {
+    try {
+      if ($(sel).length) {
+        const links = $(sel).find("a").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 5);
+        elements.push({
+          category: "pagination",
+          label: `Pagination / Halaman Berikutnya`,
+          selector: sel,
+          preview: links.length ? links : ["Pagination ditemukan"],
+          count: $(sel).find("a").length,
+          target: `navigasi halaman: URL halaman berikutnya/sebelumnya untuk scraping multi-halaman`,
+          priority: 5,
+        });
+        break;
+      }
+    } catch {}
+  }
+
+  // Meta / SEO data (always useful)
+  const metas = [];
+  $("meta[name],meta[property]").each((_, el) => {
+    const name = $(el).attr("name") || $(el).attr("property") || "";
+    const content = $(el).attr("content") || "";
+    if (name && content && content.length > 2 && !name.includes("viewport") && !name.includes("charset")) {
+      metas.push(`${name}: ${content.substring(0, 80)}`);
+    }
+  });
+  if (metas.length) {
+    elements.push({
+      category: "meta",
+      label: `Meta / SEO Data (${metas.length} tag)`,
+      selector: "meta",
+      preview: metas.slice(0, 4),
+      count: metas.length,
+      target: `meta tags: og:title, og:image, og:description, keywords untuk SEO data`,
+      priority: 3,
+    });
+  }
+
+  // JSON-LD structured data
+  const jsonLds = [];
+  $("script[type='application/ld+json']").each((_, el) => {
+    try {
+      const obj = JSON.parse($(el).text().trim());
+      jsonLds.push(obj["@type"] || "Unknown");
+    } catch {}
+  });
+  if (jsonLds.length) {
+    elements.push({
+      category: "structured",
+      label: `JSON-LD Structured Data (${jsonLds.length})`,
+      selector: "script[type='application/ld+json']",
+      preview: jsonLds,
+      count: jsonLds.length,
+      target: `JSON-LD: ${jsonLds.join(", ")} — data terstruktur berkualitas tinggi`,
+      priority: 8,
+    });
+  }
+
+  // Sort by priority descending
+  elements.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+  return elements;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SMART SCRAPER SUGGESTIONS — per site type
+// ══════════════════════════════════════════════════════════════
+function getScraperSuggestions(siteType, elements) {
+  const byCategory = {};
+  elements.forEach(e => { byCategory[e.category] = e; });
+
+  const suggestions = {
+    streaming: [
+      { label: "🎬 Daftar Film/Video Terbaru", desc: "Scrape semua film di halaman utama: judul, poster, tahun, genre, rating, link detail" },
+      { label: "🎭 Detail Film Lengkap", desc: "Scrape halaman detail film: sinopsis, genre, tahun, sutradara, pemain, rating IMDB, embed URL" },
+      { label: "📺 Daftar Episode Serial", desc: "Scrape semua episode dari halaman series: nomor episode, judul, link streaming" },
+      { label: "🔍 Hasil Pencarian Film", desc: "Scrape hasil search query tertentu: daftar film yang cocok dengan keyword" },
+      { label: "🏷️ Film Berdasarkan Genre", desc: "Scrape daftar film per genre/kategori dengan paginasi" },
+      { label: "📄 Multi-halaman (All Pages)", desc: "Scrape semua halaman dengan auto-follow pagination, kumpulkan semua film" },
+    ],
+    ecommerce: [
+      { label: "🛍️ Daftar Produk Terbaru", desc: "Scrape semua produk: nama, harga, rating, gambar, link detail" },
+      { label: "💰 Harga & Diskon Produk", desc: "Pantau harga produk tertentu, deteksi perubahan harga dan diskon" },
+      { label: "⭐ Review & Rating Produk", desc: "Scrape semua review: bintang, komentar, nama pembeli, tanggal" },
+      { label: "📦 Detail Produk Lengkap", desc: "Scrape halaman detail: nama, deskripsi, spesifikasi, harga, stok, gambar" },
+      { label: "🗂️ Kategori & Sub-kategori", desc: "Scrape struktur navigasi kategori produk" },
+      { label: "📄 Multi-halaman (All Pages)", desc: "Scrape semua halaman produk dengan auto-pagination" },
+    ],
+    news: [
+      { label: "📰 Artikel Terbaru / Headline", desc: "Scrape daftar berita terbaru: judul, penulis, tanggal, thumbnail, link" },
+      { label: "📝 Isi Artikel Lengkap", desc: "Scrape konten penuh artikel: judul, isi, penulis, tanggal, tags, gambar" },
+      { label: "🏷️ Berita per Kategori", desc: "Scrape berita dari kategori tertentu dengan paginasi" },
+      { label: "📄 Multi-halaman (All Pages)", desc: "Kumpulkan semua artikel dari banyak halaman" },
+    ],
+    forum: [
+      { label: "💬 Daftar Thread/Topik", desc: "Scrape daftar thread: judul, penulis, jumlah balasan, tanggal, views" },
+      { label: "📖 Isi Thread + Semua Balasan", desc: "Scrape konten thread lengkap: OP + semua reply" },
+      { label: "👤 Profil User", desc: "Scrape profil pengguna: username, join date, post count" },
+    ],
+    jobs: [
+      { label: "💼 Lowongan Kerja Terbaru", desc: "Scrape semua lowongan: posisi, perusahaan, lokasi, gaji, link apply" },
+      { label: "🏢 Detail Lowongan", desc: "Scrape detail loker: deskripsi, kualifikasi, benefit, cara daftar" },
+    ],
+    social: [
+      { label: "📸 Posts / Feed Terbaru", desc: "Scrape daftar post terbaru dari feed atau profil" },
+      { label: "👥 Data Profil", desc: "Scrape info profil: nama, bio, followers, following, jumlah post" },
+    ],
+    general: [
+      { label: "📋 Konten Utama Halaman", desc: "Scrape elemen utama halaman: heading, paragraf, link, gambar" },
+      { label: "🔗 Semua Link & URL", desc: "Ekstrak semua link dari halaman untuk crawling/sitemap" },
+      { label: "🖼️ Semua Gambar", desc: "Kumpulkan semua URL gambar beserta alt text" },
+      { label: "📊 Data Tabel", desc: "Ekstrak data dari tabel HTML" },
+    ],
+  };
+
+  return (suggestions[siteType] || suggestions.general).slice(0, 6);
+}
+
+
+
+// ── POST /api/url-detect ───────────────────────────────────────
+// Deteksi tipe halaman INSTAN dari URL tanpa fetch — pure URL pattern analysis
+app.post("/api/url-detect", (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: "url diperlukan" });
+  try {
+    const pageInfo = detectPageType(url);
+    res.json({ success: true, url, ...pageInfo });
+  } catch (e) {
+    res.json({ success: false, url, pageType: "unknown", suggestions: [], hint: "" });
+  }
+});
+
+
 // Ambil preview info halaman: og:image, favicon, title, description
 // Digunakan di frontend untuk preview sebelum scrape
 app.post("/api/preview", async (req, res) => {
@@ -1416,18 +2160,23 @@ Kamu diberi DATA ASLI HTML dari website yang sudah di-fetch. Gunakan data ini un
 - Gunakan class CSS dan data attributes nyata dari HTML untuk saran selector
 - Jika terdeteksi Next.js/React/SPA → WAJIB rekomendasikan puppeteer/playwright
 - Jika ada JSON-LD atau __NEXT_DATA__ → sebutkan data bisa diambil dari embedded JSON
-- Suggestions HARUS menyebut nama field/class/key spesifik yang terlihat di HTML
+- Suggestions HARUS sangat spesifik sesuai jenis website:
+  * Streaming/film: "Daftar film terbaru dengan poster & rating", "Detail film: sinopsis+cast+embed URL", "Daftar episode serial"
+  * Ecommerce: "Daftar produk: nama+harga+rating+gambar", "Detail produk lengkap", "Review & rating produk"
+  * Berita: "Artikel terbaru: judul+tanggal+penulis", "Isi artikel lengkap", "Berita per kategori"
+  * Forum: "Daftar thread terbaru", "Isi thread + semua reply"
+  * General: field/class spesifik dari HTML
 
 Balas HANYA JSON valid tanpa markdown:
 {
-  "greeting": "2 kalimat: jenis website + teknologi + strategi terbaik",
-  "question": "tanya field spesifik dari HTML (1 kalimat)",
-  "suggestions": ["field spesifik dari HTML"],
-  "site_type": "ecommerce|news|social|blog|api|forum|other",
+  "greeting": "2 kalimat: jenis website + teknologi + strategi terbaik scraping",
+  "question": "tanya field SPESIFIK dari HTML yang relevan (1 kalimat)",
+  "suggestions": ["6 saran scraping SPESIFIK sesuai jenis website — contoh field nyata dari HTML"],
+  "site_type": "streaming|ecommerce|news|forum|social|jobs|general",
   "complexity": "simple|moderate|complex",
-  "complexity_reason": "1 kalimat spesifik",
-  "scraping_strategy": "2-3 kalimat: perlu browser automation? embedded JSON tersedia?",
-  "css_selectors": { "note": "dari HTML asli", "selectors": ["sel1","sel2","sel3"] },
+  "complexity_reason": "1 kalimat spesifik kenapa kompleks/simple",
+  "scraping_strategy": "2-3 kalimat: perlu browser automation? ada embedded JSON? cara terbaik scrape site ini",
+  "css_selectors": { "note": "dari HTML asli website ini", "selectors": ["selector CSS nyata dari HTML"] },
   "recommended_modules": {
     "nodejs": { "packages": ["pkg"], "reason": "alasan spesifik", "install_cmd": "npm install pkg" },
     "python": { "packages": ["pkg"], "reason": "alasan spesifik", "install_cmd": "pip install pkg" },
@@ -1493,7 +2242,7 @@ Balas HANYA JSON valid tanpa markdown:
 
 // ── GET /api/generate/stream — SSE real-time log generate kode ─
 app.get("/api/generate/stream", async (req, res) => {
-  const { url, target, lang, bypassCF, provider, apiKey, model, moduleType } = req.query;
+  const { url, target, lang, bypassCF, provider, apiKey, model, moduleType, siteType, selectors } = req.query;
   if (!url || !target || !lang || !apiKey) { res.status(400).json({ error: "url, target, lang, apiKey diperlukan" }); return; }
 
   res.setHeader("Content-Type",  "text/event-stream");
@@ -1562,23 +2311,61 @@ ${bCF ? "PENTING: Gunakan cURL dengan full browser headers, rotate User-Agent, s
 - echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);`,
     };
 
+    const siteContext = siteType ? `\nTipe website: ${siteType}` : "";
+    const pageContext = req.query.pageType ? `\nTipe halaman: ${req.query.pageType}` : "";
+    const searchCtx  = req.query.searchQuery ? `\nQuery pencarian: "${req.query.searchQuery}"` : "";
+    const selectorContext = selectors ? (() => {
+      try {
+        const parsed = JSON.parse(selectors);
+        if (Array.isArray(parsed) && parsed.length) {
+          return "\nCSS Selectors dari HTML asli:\n" + parsed.map(s => `  ${s.category}: ${s.selector}`).join("\n");
+        }
+      } catch {}
+      return "";
+    })() : "";
+
+    const siteSpecificGuide = {
+      streaming: `\nPanduan site streaming:
+- Untuk daftar film: cari elemen kartu/item yang berulang (li, article, div.item)
+- Ambil: judul film, URL poster (src/data-src dari img), tahun, genre, rating, link detail
+- Untuk episode: ikuti link ke halaman detail, ekstrak daftar episode
+- Handle pagination: cari link "Next Page" atau nomor halaman
+- Untuk embed URL video: cari iframe[src*='embed'] atau script dengan URL video`,
+      ecommerce: `\nPanduan site ecommerce:
+- Ambil semua kartu produk: nama, harga (normal + diskon), rating, stok, gambar, link
+- Handle harga format: strip simbol mata uang, parse angka
+- Ikuti pagination untuk halaman berikutnya`,
+      news: `\nPanduan site berita:
+- Ambil daftar artikel: judul, tanggal, penulis, kategori, thumbnail, link
+- Untuk isi lengkap: ikuti link artikel, ambil konten dari elemen artikel/content
+- Handle berbagai format tanggal Indonesia`,
+    };
+
     const prompt = `URL Target: ${url}
 Yang akan di-scrape: ${target}
-Bahasa: ${langLabel[lang]}
+Bahasa: ${lang}${siteContext}${pageContext}${searchCtx}${selectorContext}
 ${bCF ? "Mode Bypass Cloudflare: AKTIF — wajib gunakan semua teknik stealth bypass" : ""}
+${(siteSpecificGuide[siteType] || "")}
 
-Tulis scraper LENGKAP untuk mengambil: ${target}
+Tugas: Buat scraper PRODUCTION-READY yang benar-benar bisa dijalankan untuk mengambil: ${target}
+
 Struktur wajib:
 1. Import/require semua library
-2. Konfigurasi (URL, headers, delay)
-3. Fungsi fetch halaman${bCF ? " dengan bypass CF/stealth" : ""}
-4. Fungsi parse & ekstrak: ${target}
-5. Fungsi format/bersihkan data
-6. Fungsi main() memanggil semua
-7. Output JSON ke console
-8. Error handling di setiap fungsi
+2. Konfigurasi (BASE_URL, headers lengkap seperti browser asli, timeout, retry)
+3. Fungsi fetchPage(url) dengan retry logic (3x) dan random delay
+4. Fungsi parseData($, html) — ekstrak data target dengan selector yang tepat
+5. Fungsi main() yang:
+   - Fetch halaman
+   - Parse data
+   - Handle pagination jika ada (ambil semua halaman)
+   - Return array hasil
+6. Output: console.log(JSON.stringify(result, null, 2))
+7. Error handling di setiap fungsi
 
-PENTING: Tulis SEMUA kode dari awal sampai akhir. JANGAN potong atau skip bagian apapun.`;
+PENTING: 
+- Gunakan selector CSS spesifik dari konteks di atas, bukan selector generic
+- Tulis SEMUA kode dari awal sampai akhir, JANGAN potong
+- Kode harus bisa langsung dijalankan tanpa modifikasi`;
 
     const code = await (async () => {
       const raw = await callAI({ provider, apiKey, model, system: sysMap[lang], prompt, maxTokens: null });
