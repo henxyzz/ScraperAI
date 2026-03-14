@@ -140,7 +140,7 @@ export function FixEngineView() {
     try {
       const h = await getHistory(selected.id);
       setHistory(h);
-      setShowHistory(p => !p);
+      setShowHistory((p: boolean) => !p);
     } catch (e: any) {
       addToast("error", e.message);
     }
@@ -429,7 +429,7 @@ Tambahkan logging timestamp di setiap request"
             {/* Compare toggle */}
             <button
               className="btn btn-ghost btn-sm"
-              onClick={() => setShowOrig(p => !p)}
+              onClick={() => setShowOrig((p: boolean) => !p)}
               style={{ alignSelf: "flex-start" }}
             >
               {showOrig ? <ChevronUp size={13} /> : <ChevronDown size={13} />}

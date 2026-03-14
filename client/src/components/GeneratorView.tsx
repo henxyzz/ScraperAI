@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronUp, Activity,
 } from "lucide-react";
 import { useStore } from "../store";
-import { generateScraper, getTemplates, installDeps, getApiRoutes, createApiRoute, deleteApiRoute, prefetchUrl } from "../api";
+import { generateScraper, getTemplates, installDeps, getApiRoutes, createApiRoute, deleteApiRoute, prefetchUrl, previewUrl } from "../api";
 import { FirewallInfo } from "./FirewallInfo";
 import { TryOutputPanel } from "./TryOutputPanel";
 import { CodeBlock } from "./CodeBlock";
@@ -105,7 +105,7 @@ export function GeneratorView() {
   };
 
   const loadTemplates = async () => {
-    if (templates.length) { setShowTemplates(p=>!p); return; }
+    if (templates.length) { setShowTemplates((p: boolean)=>!p); return; }
     try { const r = await getTemplates(); setTemplates(r.templates); setShowTemplates(true); }
     catch { addToast("error","Gagal load templates"); }
   };
@@ -499,7 +499,7 @@ export function GeneratorView() {
           {genLogs.length > 0 && (
             <div style={{background:"rgba(0,0,0,.5)",border:"1px solid var(--border2)",borderRadius:10,overflow:"hidden"}}>
               <button
-                onClick={()=>setShowGenLogs(p=>!p)}
+                onClick={()=>setShowGenLogs((p: boolean)=>!p)}
                 style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"9px 14px",
                   background:"transparent",border:"none",cursor:"pointer",color:"var(--muted)",
                   fontFamily:"var(--mono)",fontSize:11,textAlign:"left"}}
@@ -840,7 +840,7 @@ function ApiRoutesPanel({ scraperId, scraperName }:ApiRoutesPanelProps) {
         </div>
       ))}
 
-      <button className="btn btn-secondary" onClick={()=>setShowForm(p=>!p)} style={{alignSelf:"flex-start"}}>
+      <button className="btn btn-secondary" onClick={()=>setShowForm((p: boolean)=>!p)} style={{alignSelf:"flex-start"}}>
         <Route size={13}/> {showForm?"Tutup Form":"+ Buat API Route"}
       </button>
 
@@ -962,10 +962,26 @@ function Step0UrlPanel({
   logs, showLogs, setShowLogs, logRef,
   genTarget, setGenTarget, addToast,
 }: Step0Props) {
-  const [scanning,   setScanning]   = useState(false);
-  const [scanResult, setScanResult] = useState<PrefetchResult|null>(null);
-  const [checked,    setChecked]    = useState<Record<string,boolean>>({});
+  const [scanning,       setScanning]       = useState(false);
+  const [scanResult,     setScanResult]     = useState<PrefetchResult|null>(null);
+  const [checked,        setChecked]        = useState<Record<string,boolean>>({});
   const [activeCategory, setActiveCategory] = useState<string|null>(null);
+  const [previewing,     setPreviewing]     = useState(false);
+  const [preview,        setPreview]        = useState<{
+    success: boolean; title: string; description: string;
+    ogImage: string|null; favicon: string|null; themeColor: string|null;
+    siteName: string|null; layer: number; error: string|null;
+  }|null>(null);
+
+  const handlePreview = async (urlToPreview: string) => {
+    if (!urlToPreview.trim()) return;
+    setPreviewing(true); setPreview(null);
+    try {
+      const res = await previewUrl(urlToPreview.trim());
+      setPreview(res);
+    } catch { /* silent — preview is non-critical */ }
+    finally { setPreviewing(false); }
+  };
 
   const handleScan = async () => {
     if (!genUrl.trim()) { addToast("warn","Masukkan URL terlebih dahulu"); return; }
@@ -1016,9 +1032,81 @@ function Step0UrlPanel({
             <label className="field-label">URL Website yang akan di-scrape</label>
             <input className="field-input" type="url"
               placeholder="https://tokopedia.com/product, https://tiktok.com/@user, ..."
-              value={genUrl} onChange={e=>{setGenUrl(e.target.value); setScanResult(null); setChecked({});}}
-              onKeyDown={e=>e.key==="Enter"&&handleScan()}/>
+              value={genUrl} onChange={e=>{setGenUrl(e.target.value); setScanResult(null); setChecked({}); setPreview(null);}}
+              onKeyDown={e=>e.key==="Enter"&&handleScan()}
+              onBlur={e=>{ if(e.target.value.startsWith("http")) handlePreview(e.target.value); }}/>
           </div>
+
+          {/* URL Preview card — auto loads on blur */}
+          {(previewing || preview) && (
+            <div style={{
+              display:"flex", alignItems:"flex-start", gap:12,
+              padding:"12px 14px", borderRadius:10,
+              background:"rgba(0,0,0,.35)", border:"1px solid var(--border2)",
+              position:"relative",
+            }}>
+              {previewing && <div className="spinner" style={{width:14,height:14,flexShrink:0,marginTop:2}}/>}
+              {preview?.ogImage && (
+                <img
+                  src={preview.ogImage}
+                  alt="preview"
+                  style={{
+                    width:120, height:68, objectFit:"cover", borderRadius:7,
+                    border:"1px solid var(--border)", flexShrink:0, background:"var(--card)",
+                  }}
+                  onError={e=>{(e.currentTarget as HTMLImageElement).style.display="none";}}
+                />
+              )}
+              {preview && !preview.ogImage && preview.favicon && (
+                <img
+                  src={preview.favicon}
+                  alt="favicon"
+                  style={{width:28,height:28,objectFit:"contain",flexShrink:0,borderRadius:5}}
+                  onError={e=>{(e.currentTarget as HTMLImageElement).style.display="none";}}
+                />
+              )}
+              {preview && (
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{
+                    fontSize:13, fontWeight:600, color:"var(--text)",
+                    overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                    marginBottom:3,
+                  }}>
+                    {preview.title || genUrl}
+                  </div>
+                  {preview.siteName && (
+                    <div style={{fontSize:10,color:"var(--neon2)",fontFamily:"var(--mono)",marginBottom:4}}>
+                      {preview.siteName}
+                    </div>
+                  )}
+                  {preview.description && (
+                    <div style={{
+                      fontSize:11, color:"var(--text2)", lineHeight:1.5,
+                      display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical",
+                      overflow:"hidden",
+                    }}>
+                      {preview.description}
+                    </div>
+                  )}
+                  <div style={{display:"flex",gap:8,marginTop:5,alignItems:"center"}}>
+                    <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--muted)"}}>
+                      Layer {preview.layer}
+                    </span>
+                    {preview.themeColor && (
+                      <span style={{
+                        width:10,height:10,borderRadius:"50%",
+                        background:preview.themeColor,flexShrink:0,
+                        border:"1px solid rgba(255,255,255,.15)",
+                      }}/>
+                    )}
+                    {!preview.success && preview.error && (
+                      <span style={{fontSize:10,color:"var(--warn)"}}>Preview gagal — {preview.error}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {/* Scan Elements — tidak butuh API key */}
@@ -1052,7 +1140,7 @@ function Step0UrlPanel({
           {/* SSE Logs */}
           {logs.length > 0 && (
             <div style={{background:"rgba(0,0,0,.4)",border:"1px solid var(--border2)",borderRadius:9,overflow:"hidden"}}>
-              <button onClick={()=>setShowLogs(p=>!p)}
+              <button onClick={()=>setShowLogs((p: boolean)=>!p)}
                 style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 13px",
                   background:"transparent",border:"none",cursor:"pointer",color:"var(--muted)",
                   fontFamily:"var(--mono)",fontSize:10,textAlign:"left"}}>

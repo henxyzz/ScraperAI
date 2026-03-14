@@ -33,6 +33,13 @@ export const validateKey = (provider: Provider, apiKey: string, model?: string) 
 export const prefetchUrl = (url: string) =>
   api.post<import("./types").PrefetchResult>("/api/prefetch", { url }, { timeout: 18000 }).then(r => r.data);
 
+export const previewUrl = (url: string) =>
+  api.post<{
+    success: boolean; url: string; title: string; description: string;
+    ogImage: string | null; favicon: string | null; themeColor: string | null;
+    siteName: string | null; layer: number; error: string | null;
+  }>("/api/preview", { url }, { timeout: 14000 }).then(r => r.data);
+
 // ── Templates ─────────────────────────────────────────────────
 export const getTemplates = () =>
   api.get<{ success: boolean; templates: Template[] }>("/api/templates").then(r => r.data);

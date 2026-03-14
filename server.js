@@ -806,6 +806,100 @@ app.post("/api/prefetch", async (req, res) => {
   }
 });
 
+// ── POST /api/preview ─────────────────────────────────────────
+// Ambil preview info halaman: og:image, favicon, title, description
+// Digunakan di frontend untuk preview sebelum scrape
+app.post("/api/preview", async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: "url diperlukan" });
+
+  const result = {
+    success:     false,
+    url,
+    title:       "",
+    description: "",
+    ogImage:     null,
+    favicon:     null,
+    themeColor:  null,
+    siteName:    null,
+    layer:       0,
+    error:       null,
+  };
+
+  let html = null;
+
+  // Layer 1
+  try {
+    const r = await axios.get(url, {
+      timeout: 10000, validateStatus: () => true,
+      headers: buildHeaders({ "Referer": "https://www.google.com/" }),
+      maxRedirects: 5,
+    });
+    if (r.status < 400 && r.data) { html = typeof r.data === "string" ? r.data : null; result.layer = 1; }
+  } catch {}
+
+  // Layer 2 - rotate UA
+  if (!html) {
+    try {
+      await randomDelay(300, 700);
+      const r = await axios.get(url, {
+        timeout: 10000, validateStatus: () => true,
+        headers: buildHeaders({ "User-Agent": randomUA("mobile"), "Referer": "https://www.google.com/" }),
+      });
+      if (r.status < 400 && r.data) { html = typeof r.data === "string" ? r.data : null; result.layer = 2; }
+    } catch {}
+  }
+
+  if (!html) {
+    result.error = "Tidak bisa fetch halaman";
+    return res.json(result);
+  }
+
+  try {
+    const $ = cheerio.load(html);
+
+    result.title       = $("title").first().text().trim().substring(0, 120)
+                      || $("meta[property='og:title']").attr("content")?.substring(0, 120)
+                      || "";
+    result.description = $("meta[name='description']").attr("content")?.substring(0, 200)
+                      || $("meta[property='og:description']").attr("content")?.substring(0, 200)
+                      || "";
+    result.siteName    = $("meta[property='og:site_name']").attr("content") || null;
+    result.themeColor  = $("meta[name='theme-color']").attr("content") || null;
+
+    // og:image
+    const ogImg = $("meta[property='og:image']").attr("content")
+               || $("meta[property='og:image:url']").attr("content")
+               || $("meta[name='twitter:image']").attr("content")
+               || $("meta[name='twitter:image:src']").attr("content");
+
+    if (ogImg) {
+      // Make absolute URL
+      try {
+        result.ogImage = ogImg.startsWith("http") ? ogImg : new URL(ogImg, url).href;
+      } catch { result.ogImage = ogImg; }
+    }
+
+    // Favicon
+    const favLink = $("link[rel='icon']").attr("href")
+                 || $("link[rel='shortcut icon']").attr("href")
+                 || $("link[rel='apple-touch-icon']").attr("href");
+    if (favLink) {
+      try { result.favicon = favLink.startsWith("http") ? favLink : new URL(favLink, url).href; }
+      catch { result.favicon = favLink; }
+    } else {
+      // Default /favicon.ico
+      try { result.favicon = `${new URL(url).origin}/favicon.ico`; } catch {}
+    }
+
+    result.success = true;
+  } catch (e) {
+    result.error = e.message;
+  }
+
+  res.json(result);
+});
+
 // ── GET /api/templates ────────────────────────────────────────
 app.get("/api/templates", (req, res) => {
   const templates = [

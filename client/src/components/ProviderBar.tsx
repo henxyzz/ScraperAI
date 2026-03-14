@@ -126,7 +126,7 @@ export function ProviderBar() {
           value={apiKey}
           onChange={e => { setApiKey(e.target.value); setStatus("idle"); }}
         />
-        <span className="apikey-eye" onClick={() => setShowKey(p => !p)}>
+        <span className="apikey-eye" onClick={() => setShowKey((p: boolean) => !p)}>
           {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
         </span>
       </div>
