@@ -36,6 +36,8 @@ export interface AiAnalysis {
   site_type?:           string;
   complexity?:          string;
   complexity_reason?:   string;
+  scraping_strategy?:   string;
+  css_selectors?:       { note: string; selectors: string[] };
   recommended_modules?: {
     nodejs:  RecommendedModule;
     python:  RecommendedModule;
@@ -43,11 +45,24 @@ export interface AiAnalysis {
   };
 }
 
+export interface HtmlInfo {
+  fetched:       boolean;
+  status_code:   number | null;
+  title:         string;
+  detected_tech: string[];
+  has_json_ld:   boolean;
+  has_next_data: boolean;
+  img_count:     number;
+  link_count:    number;
+  fetch_error:   string | null;
+}
+
 export interface AnalyzeResult {
-  success:  boolean;
-  url:      string;
-  firewall: FirewallResult;
-  ai:       AiAnalysis;
+  success:   boolean;
+  url:       string;
+  firewall:  FirewallResult;
+  ai:        AiAnalysis;
+  html_info?: HtmlInfo;
 }
 
 export interface TrySchemaField {

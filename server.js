@@ -618,87 +618,248 @@ app.post("/api/validate", async (req, res) => {
 });
 
 // ── POST /api/analyze ─────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+//  HTML FETCHER + STRUCTURAL ANALYZER untuk /api/analyze
+// ═══════════════════════════════════════════════════════════
+
+const FETCH_HEADERS_ANALYZE = {
+  "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Cache-Control":   "no-cache",
+  "Sec-Fetch-Dest":  "document",
+  "Sec-Fetch-Mode":  "navigate",
+  "Sec-Fetch-Site":  "none",
+  "Upgrade-Insecure-Requests": "1",
+};
+
+async function fetchAndExtractHtml(url) {
+  const result = {
+    fetched: false, statusCode: null, html_snippet: "",
+    title: "", meta_desc: "", h1_tags: [], h2_tags: [],
+    class_samples: [], data_attrs: [], scripts_src: [],
+    json_ld: null, next_data: null, forms: [], tables: [],
+    img_count: 0, link_count: 0, detected_tech: [], error: null,
+  };
+  try {
+    const resp = await axios.get(url, {
+      headers: FETCH_HEADERS_ANALYZE, timeout: 18000, maxRedirects: 5,
+      validateStatus: s => s < 600, maxContentLength: 5 * 1024 * 1024,
+    });
+    result.statusCode = resp.status;
+    const contentType = resp.headers["content-type"] || "";
+    if (contentType.includes("application/json")) {
+      const jStr = typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data, null, 2);
+      result.fetched = true;
+      result.html_snippet = jStr.substring(0, 3000);
+      result.detected_tech.push("JSON API (no HTML)");
+      return result;
+    }
+    if (!contentType.includes("html") && !contentType.includes("text")) {
+      result.error = `Bukan halaman HTML: ${contentType}`; return result;
+    }
+    const html = typeof resp.data === "string" ? resp.data : "";
+    if (!html) { result.error = "HTML kosong"; return result; }
+    result.fetched = true;
+    const $ = cheerio.load(html);
+    result.title     = $("title").first().text().trim().substring(0, 120);
+    result.meta_desc = ($("meta[name='description']").attr("content") || "").substring(0, 200);
+    result.h1_tags   = $("h1").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 5);
+    result.h2_tags   = $("h2").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 8);
+
+    const classSet = new Set();
+    $("[class]").each((_, el) => {
+      const cls = $(el).attr("class") || "";
+      cls.split(/\s+/).filter(c => c.length > 2 && c.length < 40 && !/^[0-9]/.test(c)).forEach(c => classSet.add(c));
+    });
+    result.class_samples = [...classSet].slice(0, 40);
+
+    const dataAttrSet = new Set();
+    $("*").each((_, el) => {
+      Object.keys(el.attribs || {}).filter(a => a.startsWith("data-") && a.length < 40).forEach(a => dataAttrSet.add(a));
+    });
+    result.data_attrs = [...dataAttrSet].slice(0, 25);
+    result.scripts_src = $("script[src]").map((_, el) => $(el).attr("src") || "").get()
+      .filter(s => s && !s.includes("analytics") && !s.includes("gtag")).slice(0, 12);
+
+    $("script[type='application/ld+json']").each((_, el) => {
+      if (result.json_ld) return;
+      try { result.json_ld = JSON.stringify(JSON.parse($(el).text().trim())).substring(0, 800); } catch {}
+    });
+
+    const nextMatch = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+    if (nextMatch) {
+      try {
+        const nd = JSON.parse(nextMatch[1]);
+        result.next_data = JSON.stringify({ _keys: Object.keys(nd.props?.pageProps || nd), _route: nd.page }).substring(0, 400);
+      } catch { result.next_data = nextMatch[1].substring(0, 400); }
+    }
+
+    $("form").each((_, form) => {
+      const inputs = $(form).find("input,select,textarea")
+        .map((_, el) => `${el.tagName}[${$(el).attr("name") || $(el).attr("id") || "?"}]`).get();
+      if (inputs.length) result.forms.push(inputs.slice(0, 8).join(", "));
+    });
+    result.forms = result.forms.slice(0, 4);
+
+    $("table").each((_, tbl) => {
+      const headers = $(tbl).find("th").map((_, el) => $(el).text().trim()).get().filter(Boolean);
+      if (headers.length) result.tables.push(headers.slice(0, 8).join(" | "));
+    });
+    result.tables = result.tables.slice(0, 5);
+
+    result.img_count  = $("img").length;
+    result.link_count = $("a[href]").length;
+
+    const scriptContent = $("script:not([src])").text().substring(0, 5000);
+    const allScripts    = result.scripts_src.join(" ") + " " + html.substring(0, 3000);
+    const techChecks = [
+      ["Next.js",          /__NEXT_DATA__|_next\/static/],
+      ["React",            /react(?:\.min)?\.js|__reactFiber|_reactRootContainer/],
+      ["Vue.js",           /vue(?:\.min)?\.js|data-v-|__vue__/],
+      ["Angular",          /angular(?:\.min)?\.js|ng-app|ng-controller/],
+      ["Nuxt.js",          /__nuxt__|nuxt\.js/],
+      ["SvelteKit",        /svelte|__sveltekit/],
+      ["jQuery",           /jquery(?:\.min)?\.js|window\.\$/],
+      ["Webpack",          /webpack_require|__webpack_modules__/],
+      ["Tailwind CSS",     /tailwind|class="[^"]*(?:flex|grid|text-|bg-|p-|m-)[^"]*"/],
+      ["WordPress",        /wp-content|wp-includes/],
+      ["Shopify",          /shopify|Shopify\.theme/],
+      ["GraphQL",          /graphql|__typename/],
+      ["Infinite Scroll",  /infinite.?scroll|loadMore|next_page_token/i],
+      ["Login Required",   /login|sign.?in.*required|auth.*required/i],
+    ];
+    techChecks.forEach(([name, pattern]) => {
+      if (pattern.test(allScripts) || pattern.test(scriptContent)) result.detected_tech.push(name);
+    });
+
+    let snippet = "";
+    const candidates = ["main","article","[role='main']",".product",".content",".container","body"];
+    for (const sel of candidates) {
+      const el = $(sel).first();
+      if (el.length && el.text().trim().length > 100) { snippet = el.html() || ""; break; }
+    }
+    if (!snippet) snippet = $("body").html() || html;
+    const $c = cheerio.load(snippet);
+    $c("script,style,noscript,iframe,svg,head").remove();
+    let cleaned = $c.html() || snippet;
+    cleaned = cleaned.replace(/\s{2,}/g, " ").replace(/<!--[\s\S]*?-->/g, "").trim();
+    result.html_snippet = cleaned.substring(0, 8000);
+  } catch (e) {
+    result.error = e.message;
+  }
+  return result;
+}
+
+// ── POST /api/analyze ─────────────────────────────────────────
 app.post("/api/analyze", async (req, res) => {
   const { url, provider, apiKey, model } = req.body;
   if (!url || !apiKey) return res.status(400).json({ error: "url dan apiKey diperlukan" });
 
   try {
-    // Jalankan firewall detection dan AI analyze secara paralel
-    const [fw, raw] = await Promise.all([
+    const [fw, htmlData] = await Promise.all([
       detectFirewall(url),
-      callAI({
-        provider, apiKey, model,
-        system: `Kamu adalah SmartScrapeAI Agent berbahasa Indonesia.
-Analisa URL dan sarankan target scraping yang spesifik, berguna, serta rekomendasikan library terbaik.
-Balas HANYA JSON valid (tanpa markdown, tanpa backtick):
-{
-  "greeting": "2 kalimat tentang website ini dan jenis konten utamanya",
-  "question": "tanya apa yang mau di-scrape dengan spesifik (1 kalimat)",
-  "suggestions": ["saran1 spesifik","saran2","saran3","saran4","saran5","saran6"],
-  "recommended_modules": {
-    "nodejs": {
-      "packages": ["axios","cheerio"],
-      "reason": "alasan singkat kenapa paket ini cocok untuk site ini",
-      "install_cmd": "npm install axios cheerio"
-    },
-    "python": {
-      "packages": ["requests","beautifulsoup4","lxml"],
-      "reason": "alasan singkat",
-      "install_cmd": "pip install requests beautifulsoup4 lxml"
-    },
-    "php": {
-      "packages": ["guzzlehttp/guzzle"],
-      "reason": "alasan singkat",
-      "install_cmd": "composer require guzzlehttp/guzzle"
-    }
-  },
-  "site_type": "ecommerce|news|social|blog|api|other",
-  "complexity": "simple|moderate|complex",
-  "complexity_reason": "1 kalimat kenapa kompleksitas ini"
-}
-
-Perhatikan: jika site menggunakan JavaScript rendering berat (SPA, React, Vue, infinite scroll), rekomendasikan puppeteer-extra + stealth untuk nodejs dan selenium/playwright untuk python.
-Jika site simple HTML statis, axios+cheerio dan requests+bs4 sudah cukup.`,
-        prompt: `Analisa website ini untuk scraping: ${url}`,
-        maxTokens: 900,
-      }),
+      fetchAndExtractHtml(url),
     ]);
 
-    const clean = raw.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, m => m.replace(/```json\n?|```\n?/g,"")).replace(/```/g,"").trim();
+    const needsBypass = fw.bypass_recommended ||
+      htmlData.detected_tech.some(t => ["Next.js","React","Angular","Vue.js","Infinite Scroll","SvelteKit","Nuxt.js"].includes(t));
+
+    const htmlContext = htmlData.fetched ? `
+=== DATA ASLI HTML DARI WEBSITE ===
+URL: ${url}
+HTTP Status: ${htmlData.statusCode}
+Title: ${htmlData.title || "(tidak ada)"}
+Meta Description: ${htmlData.meta_desc || "(tidak ada)"}
+H1: ${htmlData.h1_tags.join(" | ") || "(tidak ada)"}
+H2: ${htmlData.h2_tags.slice(0,5).join(" | ") || "(tidak ada)"}
+Gambar: ${htmlData.img_count} | Link: ${htmlData.link_count}
+Teknologi terdeteksi: ${htmlData.detected_tech.join(", ") || "Standar HTML"}
+CSS Classes (sample): ${htmlData.class_samples.slice(0,25).join(", ")}
+Data attributes: ${htmlData.data_attrs.join(", ") || "(tidak ada)"}
+JSON-LD: ${htmlData.json_ld || "(tidak ada)"}
+__NEXT_DATA__ keys: ${htmlData.next_data || "(tidak ada)"}
+Form fields: ${htmlData.forms.join(" | ") || "(tidak ada)"}
+Tabel: ${htmlData.tables.join(" | ") || "(tidak ada)"}
+
+=== SNIPPET HTML BERSIH ===
+${htmlData.html_snippet}
+` : `URL: ${url}\nHTML fetch gagal: ${htmlData.error || "timeout/blocked"}\nFirewall: ${fw.cloudflare ? "Cloudflare" : "tidak ada"}`;
+
+    const analyzeSystem = `Kamu adalah SmartScrapeAI senior web scraping engineer berbahasa Indonesia.
+Kamu diberi DATA ASLI HTML dari website yang sudah di-fetch: class CSS, data attributes, JSON-LD, teknologi terdeteksi, dan snippet HTML nyata.
+Gunakan data ini untuk analisa yang SANGAT AKURAT dan SPESIFIK — bukan hanya berdasarkan nama domain.
+
+ATURAN:
+- Gunakan class CSS dan data attributes nyata dari HTML untuk saran selector
+- Jika terdeteksi Next.js/React/SPA → WAJIB rekomendasikan puppeteer/playwright, bukan axios biasa
+- Jika ada JSON-LD atau __NEXT_DATA__ → sebutkan data bisa diambil dari embedded JSON (lebih akurat)
+- Suggestions HARUS menyebut nama field/class/key spesifik yang terlihat di HTML
+
+Balas HANYA JSON valid tanpa markdown:
+{
+  "greeting": "2 kalimat: jenis website + teknologi terdeteksi + strategi scraping terbaik",
+  "question": "tanya field spesifik yang terlihat di HTML (1 kalimat, sebut nama class/key nyata)",
+  "suggestions": ["field spesifik dari HTML misal: .price, data-product-id, atau __NEXT_DATA__.props.product.name"],
+  "site_type": "ecommerce|news|social|blog|api|forum|dashboard|other",
+  "complexity": "simple|moderate|complex",
+  "complexity_reason": "1 kalimat spesifik sebut teknologinya",
+  "scraping_strategy": "2-3 kalimat strategi: apakah perlu browser automation, embedded JSON tersedia, dll",
+  "css_selectors": { "note": "selector dari HTML asli", "selectors": ["sel1","sel2","sel3"] },
+  "recommended_modules": {
+    "nodejs": { "packages": ["pkg1"], "reason": "alasan spesifik berdasarkan tech stack", "install_cmd": "npm install pkg1" },
+    "python": { "packages": ["pkg1"], "reason": "alasan spesifik", "install_cmd": "pip install pkg1" },
+    "php":    { "packages": ["guzzlehttp/guzzle"], "reason": "alasan", "install_cmd": "composer require guzzlehttp/guzzle" }
+  }
+}`;
+
+    const raw = await callAI({ provider, apiKey, model, system: analyzeSystem, prompt: htmlContext, maxTokens: 1200 });
+    const clean = raw.replace(/```json|```/g, "").trim();
     let parsed;
     try { parsed = JSON.parse(clean); }
     catch {
-      // Fallback: deteksi site type dari URL untuk default modules
       const host = (() => { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } })();
-      const needsBypass = fw.bypass_recommended;
-      const isSocial = ["instagram","tiktok","twitter","x.com","facebook","linkedin"].some(s => host.includes(s));
-      const isEcomm  = ["shopee","tokopedia","lazada","amazon","ebay","alibaba"].some(s => host.includes(s));
-
+      const isSocial = ["instagram","tiktok","twitter","x.com","facebook"].some(s => host.includes(s));
+      const isEcomm  = ["shopee","tokopedia","lazada","amazon","ebay"].some(s => host.includes(s));
       parsed = {
-        greeting:    `Website ${url} siap untuk di-scrape menggunakan SmartScrapeAI v4.`,
+        greeting:    `Website ${htmlData.title || url}. Teknologi: ${htmlData.detected_tech.join(", ") || "Standar HTML"}.`,
         question:    "Data apa yang ingin kamu ambil dari website ini?",
-        suggestions: ["Nama, harga, dan deskripsi produk","Judul dan konten artikel","Data tabel dan harga","Semua link dan URL halaman","Gambar dan media","Informasi kontak"],
+        suggestions: htmlData.h2_tags.slice(0,4).length
+          ? [...htmlData.h2_tags.slice(0,4),"Gambar & media","Link & URL"]
+          : ["Judul & konten","Harga & produk","Gambar","Link","Data tabel","Metadata"],
         site_type:   isSocial ? "social" : isEcomm ? "ecommerce" : "other",
         complexity:  needsBypass ? "complex" : "moderate",
-        complexity_reason: needsBypass ? "Site menggunakan proteksi bot/Cloudflare" : "Site dengan struktur HTML standar",
+        complexity_reason: needsBypass ? `Terdeteksi: ${htmlData.detected_tech.join(", ")}` : "Struktur HTML standar",
+        scraping_strategy: needsBypass
+          ? "Gunakan puppeteer-extra + stealth untuk Node.js atau playwright untuk Python karena site menggunakan JS rendering."
+          : "Bisa pakai axios+cheerio (Node.js) atau requests+BeautifulSoup (Python) untuk site HTML statis ini.",
+        css_selectors: { note: "Sample dari HTML", selectors: htmlData.class_samples.slice(0,5) },
         recommended_modules: {
-          nodejs: needsBypass || isSocial
-            ? { packages: ["puppeteer-extra","puppeteer-extra-plugin-stealth","user-agents"], reason: "Site memerlukan browser automation untuk bypass proteksi", install_cmd: "npm install puppeteer-extra puppeteer-extra-plugin-stealth user-agents" }
-            : { packages: ["axios","cheerio"], reason: "Site HTML statis, axios+cheerio ringan dan cepat", install_cmd: "npm install axios cheerio" },
-          python: needsBypass || isSocial
-            ? { packages: ["cloudscraper","beautifulsoup4","fake-useragent","lxml"], reason: "cloudscraper untuk bypass CF, bs4 untuk parsing", install_cmd: "pip install cloudscraper beautifulsoup4 fake-useragent lxml" }
-            : { packages: ["requests","beautifulsoup4","lxml"], reason: "requests+bs4 cukup untuk HTML statis", install_cmd: "pip install requests beautifulsoup4 lxml" },
-          php: { packages: ["guzzlehttp/guzzle"], reason: "Guzzle HTTP client terbaik untuk PHP scraping", install_cmd: "composer require guzzlehttp/guzzle" },
+          nodejs: needsBypass
+            ? { packages: ["puppeteer-extra","puppeteer-extra-plugin-stealth"], reason: "Butuh browser automation", install_cmd: "npm install puppeteer-extra puppeteer-extra-plugin-stealth" }
+            : { packages: ["axios","cheerio"], reason: "HTML statis", install_cmd: "npm install axios cheerio" },
+          python: needsBypass
+            ? { packages: ["playwright","beautifulsoup4"], reason: "playwright untuk JS rendering", install_cmd: "pip install playwright beautifulsoup4" }
+            : { packages: ["requests","beautifulsoup4","lxml"], reason: "Standar HTML statis", install_cmd: "pip install requests beautifulsoup4 lxml" },
+          php: { packages: ["guzzlehttp/guzzle"], reason: "HTTP client PHP", install_cmd: "composer require guzzlehttp/guzzle" },
         },
       };
     }
 
-    res.json({ success: true, url, firewall: fw, ai: parsed });
+    const html_info = {
+      fetched: htmlData.fetched, status_code: htmlData.statusCode,
+      title: htmlData.title, detected_tech: htmlData.detected_tech,
+      has_json_ld: !!htmlData.json_ld, has_next_data: !!htmlData.next_data,
+      img_count: htmlData.img_count, link_count: htmlData.link_count,
+      fetch_error: htmlData.error || null,
+    };
+
+    res.json({ success: true, url, firewall: fw, ai: parsed, html_info });
   } catch (e) {
     console.error("[analyze]", e.message);
     res.status(500).json({ error: e.message });
   }
-});
 
 // ── POST /api/generate ────────────────────────────────────────
 app.post("/api/generate", async (req, res) => {

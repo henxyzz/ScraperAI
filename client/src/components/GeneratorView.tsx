@@ -208,6 +208,58 @@ export function GeneratorView() {
               <p style={{fontSize:13,color:"var(--text2)",lineHeight:1.7}}>{genAnalysis.ai.greeting}</p>
               <p style={{fontSize:13,color:"var(--text)",fontWeight:600}}>{genAnalysis.ai.question}</p>
 
+              {/* ── HTML Fetch Info Badge ── */}
+              {genAnalysis.html_info && (
+                <div style={{
+                  background:genAnalysis.html_info.fetched?"rgba(46,255,168,.05)":"rgba(255,184,48,.05)",
+                  border:`1px solid ${genAnalysis.html_info.fetched?"rgba(46,255,168,.2)":"rgba(255,184,48,.25)"}`,
+                  borderRadius:9,padding:"10px 14px",
+                }}>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:6}}>
+                    <span style={{fontFamily:"var(--mono)",fontSize:10,letterSpacing:1,
+                      color:genAnalysis.html_info.fetched?"var(--neon)":"var(--warn)"}}>
+                      {genAnalysis.html_info.fetched?"✅ HTML BERHASIL DI-FETCH":"⚠️ HTML TIDAK BISA DI-FETCH"}
+                    </span>
+                    {genAnalysis.html_info.status_code&&<span className="badge badge-neutral" style={{fontSize:9}}>HTTP {genAnalysis.html_info.status_code}</span>}
+                    {genAnalysis.html_info.has_json_ld&&<span className="badge badge-neon" style={{fontSize:9}}>JSON-LD ✓</span>}
+                    {genAnalysis.html_info.has_next_data&&<span className="badge badge-blue" style={{fontSize:9}}>__NEXT_DATA__ ✓</span>}
+                    {genAnalysis.html_info.fetch_error&&<span style={{fontSize:11,color:"var(--warn)"}}>— {genAnalysis.html_info.fetch_error}</span>}
+                  </div>
+                  {genAnalysis.html_info.detected_tech.length>0&&(
+                    <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:4}}>
+                      <span style={{fontSize:10,color:"var(--muted)"}}>Tech:</span>
+                      {genAnalysis.html_info.detected_tech.map((t:string)=>(
+                        <span key={t} className="module-pkg-badge" style={{fontSize:9}}>{t}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{display:"flex",gap:12,fontSize:11,color:"var(--muted)"}}>
+                    {genAnalysis.html_info.title&&<span>📄 {genAnalysis.html_info.title.substring(0,60)}</span>}
+                    <span>🖼 {genAnalysis.html_info.img_count} img</span>
+                    <span>🔗 {genAnalysis.html_info.link_count} link</span>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Scraping Strategy ── */}
+              {genAnalysis.ai.scraping_strategy&&(
+                <div style={{background:"rgba(0,194,255,.05)",border:"1px solid rgba(0,194,255,.18)",borderRadius:9,padding:"10px 14px"}}>
+                  <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--neon2)",letterSpacing:1,textTransform:"uppercase",marginBottom:5}}>
+                    💡 Strategi Scraping
+                  </div>
+                  <p style={{fontSize:12.5,color:"var(--text2)",lineHeight:1.7}}>{genAnalysis.ai.scraping_strategy}</p>
+                  {genAnalysis.ai.css_selectors?.selectors&&genAnalysis.ai.css_selectors.selectors.length>0&&(
+                    <div style={{marginTop:8,display:"flex",gap:5,flexWrap:"wrap"}}>
+                      <span style={{fontSize:10,color:"var(--muted)"}}>CSS selectors dari HTML:</span>
+                      {genAnalysis.ai.css_selectors.selectors.map((s:string)=>(
+                        <code key={s} style={{fontFamily:"var(--mono)",fontSize:10,padding:"1px 6px",
+                          background:"rgba(0,0,0,.4)",border:"1px solid var(--border2)",borderRadius:4,color:"var(--neon)"}}>{s}</code>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* ── Checkbox Field Selector ── */}
               <div className="field">
                 <label className="field-label" style={{display:"flex",alignItems:"center",gap:7}}>
