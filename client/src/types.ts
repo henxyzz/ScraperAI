@@ -207,3 +207,5 @@ export interface TryOutputResult {
   note:         string;
   asApiRoute?:  ApiRoute;
 }
+
+export type ModuleType = "commonjs" | "esm" | "esm-ts";
