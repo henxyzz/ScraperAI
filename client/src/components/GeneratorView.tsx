@@ -2,13 +2,14 @@ import { useState } from "react";
 import {
   Globe, Zap, Code2, CheckCircle, ArrowRight, ArrowLeft,
   RefreshCw, Wand2, Package, Shield, ShieldOff,
-  Route, Terminal, Play, PlusCircle, Box, Cpu
+  Terminal, Play, Box, Cpu
 } from "lucide-react";
 import { useStore } from "../store";
-import { analyzeUrl, generateScraper, getTemplates, tryScraper, createApiRoute, installDeps } from "../api";
+import { analyzeUrl, generateScraper, getTemplates, installDeps } from "../api";
 import { FirewallInfo } from "./FirewallInfo";
+import { TryOutputPanel } from "./TryOutputPanel";
 import { CodeBlock } from "./CodeBlock";
-import type { Template, Lang, ApiRoute } from "../types";
+import type { Template, Lang } from "../types";
 
 const STEPS = [
   { id: 0, label: "URL" },
@@ -47,14 +48,6 @@ export function GeneratorView() {
   const [moduleInstalled,  setModuleInstalled]  = useState<Record<string, boolean>>({});
 
   // v4: Try output
-  const [tryLoading,    setTryLoading]    = useState(false);
-  const [tryResult,     setTryResult]     = useState<any>(null);
-  const [tryInputs,     setTryInputs]     = useState<Record<string, string>>({});
-  const [makeApiRoute,  setMakeApiRoute]  = useState(false);
-  const [routeCategory, setRouteCategory] = useState("scraper");
-  const [routeName,     setRouteName]     = useState("");
-  const [createdRoute,  setCreatedRoute]  = useState<ApiRoute | null>(null);
-  const [routeLoading,  setRouteLoading]  = useState(false);
 
   // v4: Auto install (Step 3)
   const [installLoading, setInstallLoading] = useState(false);
@@ -150,40 +143,7 @@ export function GeneratorView() {
   };
 
   // ── v4: Try Output ────────────────────────────────────────
-  const handleTry = async () => {
-    if (!genResult?.id) return;
-    setTryLoading(true); setTryResult(null);
-    try {
-      const res = await tryScraper(genResult.id, tryInputs);
-      setTryResult(res.preview);
-    } catch (e: any) {
-      addToast("error", e.message || "Try gagal");
-    } finally {
-      setTryLoading(false);
-    }
-  };
-
   // ── v4: Create API Route ──────────────────────────────────
-  const handleCreateRoute = async () => {
-    if (!genResult?.id || !routeName.trim()) { addToast("warn", "Isi nama route"); return; }
-    setRouteLoading(true);
-    try {
-      const slug = routeName.trim().toLowerCase().replace(/\s+/g,"-").replace(/[^a-z0-9-]/g,"");
-      const res  = await createApiRoute(genResult.id, {
-        name: slug, category: routeCategory, method: "GET",
-        path: `/api/generated/${routeCategory}/${slug}`,
-        description: `Scraper endpoint untuk ${genUrl} — target: ${genTarget}`,
-        params: (genResult.trySchema||[]).map(f => ({ name:f.name, type:f.type, required:f.required, description:f.label })),
-      });
-      setCreatedRoute(res.route);
-      addToast("success", `API Route dibuat: ${res.route.path}`);
-    } catch (e: any) {
-      addToast("error", e.message || "Gagal buat route");
-    } finally {
-      setRouteLoading(false);
-    }
-  };
-
   // ── v4: Auto Install di Step 3 ────────────────────────────
   const handleAutoInstall = async () => {
     if (!genResult?.id) return;
@@ -524,116 +484,32 @@ export function GeneratorView() {
           <div className="card">
             <div className="card-head">
               <Play size={14} style={{ color: "var(--neon3)" }} />
-              <span className="card-tag">Try Output</span>
-              <span className="badge badge-neon" style={{ marginLeft: "auto", fontSize: 9 }}>v4</span>
+              <span className="card-tag">Try Output — Real Data</span>
+              <span className="badge badge-neon" style={{ marginLeft: "auto", fontSize: 9 }}>v4 live scraper</span>
               <div className="card-dots"><span /><span /><span /></div>
             </div>
-            <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {(genResult.trySchema || []).map(field => (
-                <div className="field" key={field.name}>
-                  <label className="field-label">
-                    {field.label}
-                    {field.required && <span style={{ color: "var(--danger)", marginLeft: 4 }}>*</span>}
-                  </label>
-                  <input
-                    className="field-input"
-                    type={field.type}
-                    placeholder={field.placeholder}
-                    value={tryInputs[field.name] || ""}
-                    onChange={e => setTryInputs(p => ({ ...p, [field.name]: e.target.value }))}
-                  />
-                </div>
-              ))}
-              <button className="btn btn-secondary" onClick={handleTry} disabled={tryLoading} style={{ alignSelf: "flex-start" }}>
-                {tryLoading
-                  ? <><div className="spinner" style={{ width: 13, height: 13 }} /> Mengecek...</>
-                  : <><Play size={13} /> Run Try Output</>}
-              </button>
-
-              {tryResult && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div className="try-output-card">
-                    {[
-                      { k: "Target",  v: tryResult.target },
-                      { k: "Command", v: tryResult.run_command, mono: true },
-                      { k: "Lines",   v: `${tryResult.code_lines} baris` },
-                      { k: "Firewall",v: tryResult.firewall_check?.bypass_recommended ? "⚠ Detected" : "✓ Clear",
-                        color: tryResult.firewall_check?.bypass_recommended ? "var(--warn)" : "var(--neon)" },
-                    ].map(row => (
-                      <div className="try-output-row" key={row.k}>
-                        <span className="try-key">{row.k}</span>
-                        {row.mono
-                          ? <code className="try-code">{row.v}</code>
-                          : <span className="try-val" style={row.color ? { color: row.color } : {}}>{row.v}</span>}
-                      </div>
-                    ))}
-                    <div className="try-output-row" style={{ alignItems: "flex-start" }}>
-                      <span className="try-key">Preview</span>
-                      <pre className="try-preview">{tryResult.code_preview}</pre>
-                    </div>
-                    <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{tryResult.note}</p>
-                  </div>
-
-                  {/* ── v4: JADIKAN API ROUTE CHECKBOX ── */}
-                  <div className="api-route-toggle">
-                    <label className="api-route-check-label">
-                      <input
-                        type="checkbox"
-                        checked={makeApiRoute}
-                        onChange={e => setMakeApiRoute(e.target.checked)}
-                        className="api-route-checkbox"
-                      />
-                      <Route size={13} style={{ color: "var(--neon3)" }} />
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>Jadikan API Route</span>
-                      <span className="badge badge-purple" style={{ fontSize: 9 }}>auto add</span>
-                    </label>
-                    <p style={{ fontSize: 11, color: "var(--muted)", marginLeft: 26 }}>
-                      Auto add ke <code style={{ fontFamily: "var(--mono)", color: "var(--neon2)", fontSize: 10 }}>/api/generated/kategori/fitur</code>
-                    </p>
-                  </div>
-
-                  {makeApiRoute && !createdRoute && (
-                    <div className="api-route-config">
-                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        <div className="field" style={{ flex: 1, minWidth: 130 }}>
-                          <label className="field-label">Kategori</label>
-                          <input className="field-input" placeholder="scraper / ecommerce..." value={routeCategory}
-                            onChange={e => setRouteCategory(e.target.value.toLowerCase().replace(/\s+/g,"-"))} />
-                        </div>
-                        <div className="field" style={{ flex: 2, minWidth: 160 }}>
-                          <label className="field-label">Nama Route</label>
-                          <input className="field-input" placeholder="get-products / scrape-news..." value={routeName}
-                            onChange={e => setRouteName(e.target.value.toLowerCase().replace(/\s+/g,"-"))} />
-                        </div>
-                      </div>
-                      <div className="api-route-preview-path">
-                        <Route size={11} style={{ color: "var(--neon3)", flexShrink: 0 }} />
-                        <code style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--neon2)" }}>
-                          GET /api/generated/{routeCategory||"kategori"}/{routeName||"nama-route"}
-                        </code>
-                      </div>
-                      <button className="btn btn-primary btn-sm" onClick={handleCreateRoute} disabled={routeLoading || !routeName.trim()}
-                        style={{ alignSelf: "flex-start" }}>
-                        {routeLoading
-                          ? <><div className="spinner" style={{ width: 12, height: 12 }} /> Membuat...</>
-                          : <><PlusCircle size={12} /> Tambah ke API Routes</>}
-                      </button>
-                    </div>
-                  )}
-
-                  {createdRoute && (
-                    <div className="info-box neon">
-                      <Route size={14} />
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <span style={{ fontWeight: 600, fontSize: 12 }}>API Route berhasil dibuat!</span>
-                        <code style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{createdRoute.method} {createdRoute.path}</code>
-                        <span style={{ fontSize: 11, color: "var(--text2)" }}>Lihat di tab API Docs → Generated Routes</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+            <div className="card-body">
+              <TryOutputPanel
+                scraper={{
+                  id: genResult.id,
+                  name: `${genUrl.replace(/https?:\/\//, '').split('/')[0]}-scraper`,
+                  url: genUrl,
+                  target: genTarget,
+                  lang: genLang,
+                  bypassCF: genBypassCF,
+                  code: genResult.code,
+                  trySchema: genResult.trySchema || [],
+                  provider: provider,
+                  model: model || "",
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                  filename: `scraper.${genLang === "nodejs" ? "js" : genLang === "python" ? "py" : "php"}`,
+                  fixCount: 0,
+                  history: [],
+                }}
+              />
             </div>
+          </div>
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

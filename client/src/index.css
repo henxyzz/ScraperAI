@@ -895,3 +895,58 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 
 /* ── lang-opt AI rec badge ───────────────────────────── */
 .lang-opt { display: flex; flex-direction: column; gap: 2px; }
+
+/* ════════════════════════════════════════
+   TryOutputPanel & Scraped Data — v4
+════════════════════════════════════════ */
+
+.try-panel {
+  display: flex; flex-direction: column; gap: 0;
+}
+.try-panel-toggle {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(176,111,255,.08); border: 1px solid rgba(176,111,255,.2);
+  color: var(--neon3); border-radius: 8px; padding: 6px 12px;
+  font-size: 12px; font-family: var(--mono);
+  cursor: pointer; transition: all .15s; align-self: flex-start;
+  margin-bottom: 10px;
+}
+.try-panel-toggle:hover { background: rgba(176,111,255,.15); }
+.try-panel-body { display: flex; flex-direction: column; gap: 0; }
+
+/* Scraped data card */
+.scraped-data-card {
+  background: rgba(0,0,0,.3); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 14px;
+  overflow-x: auto;
+}
+.scraped-data-card table { width: 100%; }
+.scraped-data-card td { padding: 5px 8px 5px 0; vertical-align: top; }
+
+/* Raw JSON block */
+.try-raw-json {
+  font-family: var(--mono); font-size: 10px; color: var(--text2);
+  background: rgba(0,0,0,.4); padding: 12px; border-radius: 8px;
+  max-height: 300px; overflow-y: auto; overflow-x: auto;
+  white-space: pre; margin-top: 8px; border: 1px solid var(--border);
+}
+
+/* Scraper doc cards in Docs view */
+.scraper-doc-card {
+  background: rgba(0,0,0,.3); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 12px 14px;
+  transition: border-color .15s;
+}
+.scraper-doc-card:hover { border-color: var(--border3); }
+
+/* Method badges */
+.method-get    { background: rgba(46,255,168,.12);  color: #2effa8;  border: 1px solid rgba(46,255,168,.25); }
+.method-post   { background: rgba(0,194,255,.12);   color: #00c2ff;  border: 1px solid rgba(0,194,255,.25); }
+.method-delete { background: rgba(255,69,96,.12);   color: #ff4560;  border: 1px solid rgba(255,69,96,.25); }
+.method-put    { background: rgba(255,184,48,.12);  color: #ffb830;  border: 1px solid rgba(255,184,48,.25); }
+
+/* Mobile: scraped table responsive */
+@media (max-width: 640px) {
+  .scraped-data-card td:first-child { width: 90px; font-size: 9px; }
+  .try-raw-json { font-size: 9px; }
+}

@@ -948,34 +948,241 @@ app.get("/api/scraper/:id/history", (req, res) => {
 });
 
 // ── POST /api/scraper/:id/try ─────────────────────────────────
+// v4: REAL SCRAPER — inline fetch+parse, return actual JSON data
 app.post("/api/scraper/:id/try", async (req, res) => {
   const entry = registry.getById(req.params.id);
   if (!entry) return res.status(404).json({ error: "Scraper tidak ditemukan" });
 
-  const { target_url, video_url, post_url, product_url, tweet_url } = req.body;
-  const targetURL = target_url || video_url || post_url || product_url || tweet_url || entry.url;
+  const inputURL = req.body.target_url || req.body.video_url || req.body.post_url
+    || req.body.product_url || req.body.tweet_url || req.body.url || entry.url;
 
+  const cheerio = (() => { try { return require("cheerio"); } catch { return null; } })();
+
+  // ── Browser-like headers ──────────────────────────────────
+  const HEADERS = {
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control":   "no-cache",
+    "Pragma":          "no-cache",
+    "Sec-Fetch-Dest":  "document",
+    "Sec-Fetch-Mode":  "navigate",
+    "Sec-Fetch-Site":  "none",
+    "Upgrade-Insecure-Requests": "1",
+  };
+
+  // ── Helper: fetch page ────────────────────────────────────
+  const fetchPage = async (url) => {
+    const resp = await axios.get(url, {
+      headers: HEADERS, timeout: 25000, maxRedirects: 5,
+      validateStatus: s => s < 500,
+    });
+    return resp.data;
+  };
+
+  // ── Helper: extract JSON-LD / __NEXT_DATA__ / embedded JSON ──
+  const extractEmbeddedJson = (html) => {
+    if (!html) return null;
+    // 1) __NEXT_DATA__
+    const nextData = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+    if (nextData) { try { return { _source: "NEXT_DATA", data: JSON.parse(nextData[1]) }; } catch {} }
+    // 2) JSON-LD
+    const jsonLds = [...html.matchAll(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)];
+    for (const m of jsonLds) {
+      try {
+        const obj = JSON.parse(m[1].trim());
+        if (obj["@type"] || obj.name || obj.price) return { _source: "JSON-LD", data: obj };
+      } catch {}
+    }
+    // 3) window.__STATE__ / window.STATE / window.pageData
+    const stateMatches = html.match(/window\.__(?:STATE|INITIAL_STATE|DATA|pageData|props)__\s*=\s*(\{[\s\S]*?\});/);
+    if (stateMatches) { try { return { _source: "window.__STATE__", data: JSON.parse(stateMatches[1]) }; } catch {} }
+    return null;
+  };
+
+  // ── Detect site & use specialist parser ───────────────────
+  const host = (() => { try { return new URL(inputURL).hostname.toLowerCase().replace("www.",""); } catch { return ""; } })();
+
+  const SITE_PARSERS = {
+    "tokopedia.com": async (html, url) => {
+      const embedded = extractEmbeddedJson(html);
+      let result = { url, site: "tokopedia.com", parsed_by: "inline-parser-v4" };
+
+      // Try NEXT_DATA first (most reliable for Tokopedia)
+      if (embedded?.data) {
+        const d = embedded.data;
+        // Navigate Tokopedia's NEXT_DATA structure
+        const pdp = d?.props?.pageProps?.productSSRData?.pdpGetLayout?.basicInfo ||
+                    d?.props?.pageProps?.layoutData?.pdpGetLayout?.basicInfo ||
+                    d?.props?.pageProps;
+        if (pdp?.name) {
+          result = {
+            ...result,
+            nama_produk:   pdp.name,
+            harga:         pdp.price?.value ? `Rp ${pdp.price.value.toLocaleString("id-ID")}` : pdp.priceInfo?.price || "N/A",
+            rating:        pdp.rating?.averageRate || pdp.stats?.rating || "N/A",
+            jumlah_review: pdp.stats?.reviewCount || pdp.rating?.totalRating || 0,
+            terjual:       pdp.stats?.txSuccess || 0,
+            stok:          pdp.stock?.value || "Ada",
+            toko:          pdp.shopInfo?.name || pdp.shopName || "N/A",
+            lokasi:        pdp.shopInfo?.location || "N/A",
+            kondisi:       pdp.condition === 1 ? "Baru" : "Bekas",
+            berat:         pdp.weight ? `${pdp.weight} gram` : "N/A",
+            kategori:      pdp.breadcrumb?.map(b => b.name).join(" > ") || "N/A",
+            gambar:        (pdp.media?.photos || []).slice(0,3).map(p => p.urlThumbnail || p.url300 || p.url),
+            deskripsi:     (pdp.description?.replace(/<[^>]+>/g,"").substring(0,300) || "N/A") + "...",
+            url_produk:    url,
+            _source:       embedded._source,
+          };
+          return result;
+        }
+      }
+
+      // Fallback: cheerio HTML parsing
+      if (cheerio) {
+        const $ = cheerio.load(html);
+        result = {
+          ...result,
+          nama_produk:   $("h1[data-testid='lblPDPDetailProductName'], h1.css-1os9jjn, [class*='product-name'] h1").first().text().trim() || $("h1").first().text().trim() || "N/A",
+          harga:         $("[data-testid='lblPDPDetailProductPrice'], .css-o0erv3, [class*='product-price']").first().text().trim() || "N/A",
+          rating:        $("[data-testid='icnStarRating'], .css-1c2dfid, [class*='star-rating']").first().text().trim() || "N/A",
+          toko:          $("[data-testid='llbPDPFooterShopName'], .css-1xs1wfr, [class*='shop-name']").first().text().trim() || "N/A",
+          deskripsi:     $("[data-testid='lblPDPDescriptionProduk'], [class*='product-desc']").first().text().trim().substring(0,300) || "N/A",
+          gambar:        $("img[data-testid='PDPMainImage'], .main-product-image img, [class*='product-image'] img").map((_,el) => $(el).attr("src") || $(el).attr("data-src")).get().filter(Boolean).slice(0,3),
+          url_produk:    url,
+          _source:       "cheerio-html-parser",
+          _note:         "Tokopedia memblokir akses langsung. Data mungkin tidak lengkap. Gunakan scraper dengan puppeteer stealth untuk data lengkap.",
+        };
+      }
+      return result;
+    },
+
+    "shopee.co.id": async (html, url) => {
+      const embedded = extractEmbeddedJson(html);
+      if (!cheerio) return { url, site: "shopee.co.id", error: "cheerio tidak tersedia" };
+      const $ = cheerio.load(html);
+      return {
+        url, site: "shopee.co.id", parsed_by: "inline-parser-v4",
+        nama_produk: $("._2rI3BH, [class*='pdp-product-title']").first().text().trim() || $("h1").first().text().trim() || "N/A",
+        harga:       $("._3n5NQx, [class*='pdp-price']").first().text().trim() || "N/A",
+        toko:        $("[class*='seller-name'], ._1VqRBa").first().text().trim() || "N/A",
+        _note:       "Shopee memerlukan browser automation untuk data lengkap",
+      };
+    },
+
+    "youtube.com": async (html, url) => {
+      const embedded = extractEmbeddedJson(html);
+      const videoId = url.match(/v=([^&]+)/)?.[1] || url.match(/youtu\.be\/([^?]+)/)?.[1];
+      if (embedded?.data) {
+        const page = embedded.data;
+        const vd = page?.props?.pageProps?.videoDetails || page?.videoDetails;
+        if (vd) return { url, site: "youtube.com", parsed_by: "NEXT_DATA",
+          judul: vd.title, channel: vd.author, views: vd.viewCount, durasi: vd.lengthSeconds + "s",
+          thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`, video_id: videoId };
+      }
+      if (!cheerio) return { url, site: "youtube.com", video_id: videoId };
+      const $ = cheerio.load(html);
+      return {
+        url, site: "youtube.com", parsed_by: "inline-parser-v4",
+        judul:     $("meta[name='title']").attr("content") || $("title").text().replace(" - YouTube",""),
+        channel:   $("link[itemprop='name']").attr("content") || "N/A",
+        thumbnail: videoId ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg` : "N/A",
+        video_id:  videoId || "N/A",
+      };
+    },
+  };
+
+  // ── Generic fallback parser ───────────────────────────────
+  const genericParser = async (html, url) => {
+    if (!cheerio) return { url, error: "Parser tidak tersedia", note: "Install cheerio di server" };
+    const $ = cheerio.load(html);
+
+    // Remove scripts, styles, nav, footer
+    $("script, style, nav, footer, header, noscript, svg, iframe").remove();
+
+    // Extract based on target field
+    const target  = entry.target.toLowerCase();
+    const result  = { url, site: host, parsed_by: "generic-cheerio-parser", target: entry.target };
+
+    // Prices
+    if (target.includes("harga") || target.includes("price")) {
+      const priceEls = $("[class*='price'],[class*='harga'],[itemprop='price']").map((_,el) => $(el).text().trim()).get().filter(Boolean);
+      result.harga = priceEls.slice(0,3);
+    }
+    // Product names / titles
+    result.judul_halaman = $("title").text().trim();
+    result.h1 = $("h1").map((_,el) => $(el).text().trim()).get().filter(Boolean).slice(0,3);
+    result.h2 = $("h2").map((_,el) => $(el).text().trim()).get().filter(Boolean).slice(0,5);
+    // Meta
+    result.meta_description = $("meta[name='description']").attr("content") || "N/A";
+    result.og_title         = $("meta[property='og:title']").attr("content") || "N/A";
+    result.og_description   = $("meta[property='og:description']").attr("content") || "N/A";
+    result.og_image         = $("meta[property='og:image']").attr("content") || "N/A";
+    // Images
+    result.gambar = $("img[src]").map((_,el) => $(el).attr("src")).get()
+      .filter(s => s && !s.includes("data:") && s.length > 10).slice(0,5);
+    // Links
+    result.links_count = $("a[href]").length;
+    // Tables
+    const tables = [];
+    $("table").each((_,tbl) => {
+      const rows = $(tbl).find("tr").map((_,tr) => $(tr).find("td,th").map((_,td) => $(td).text().trim()).get()).get();
+      if (rows.length) tables.push(rows.slice(0,5));
+    });
+    if (tables.length) result.tabel = tables.slice(0,2);
+    // Embedded JSON
+    const embedded = extractEmbeddedJson(html);
+    if (embedded) result._embedded_json_source = embedded._source;
+
+    return result;
+  };
+
+  // ── MAIN EXECUTION ────────────────────────────────────────
   try {
-    const fw      = await detectFirewall(targetURL);
-    const extMap  = { nodejs: "js", python: "py", php: "php" };
-    const runMap  = { nodejs: `node scraper.js`, python: `python3 scraper.py`, php: `php scraper.php` };
-    const preview = {
-      message:        "Scraper siap dijalankan",
-      target:         targetURL,
-      scraper_id:     entry.id,
-      lang:           entry.lang,
-      bypass_mode:    entry.bypassCF,
-      firewall_check: fw,
-      run_command:    runMap[entry.lang],
-      code_lines:     entry.code.split("\n").length,
-      code_preview:   entry.code.substring(0, 400) + "...",
-      download_url:   `/api/scraper/${entry.id}/download`,
-      zip_url:        `/api/scraper/${entry.id}/zip`,
-      note:           "Download kode atau ZIP lalu jalankan di lokal/server/Termux kamu",
-    };
-    res.json({ success: true, preview });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.log(`[try-v4] Fetching: ${inputURL}`);
+    const html = await fetchPage(inputURL);
+
+    // Pick specialist parser or generic
+    let scraped = null;
+    for (const [domain, parser] of Object.entries(SITE_PARSERS)) {
+      if (host.includes(domain)) {
+        scraped = await parser(html, inputURL);
+        break;
+      }
+    }
+    if (!scraped) scraped = await genericParser(html, inputURL);
+
+    const fw = await detectFirewall(inputURL).catch(() => ({ bypass_recommended: false, details: [] }));
+
+    return res.json({
+      success:      true,
+      scraped_data: scraped,
+      url:          inputURL,
+      scraper_id:   entry.id,
+      scraper_name: entry.name,
+      lang:         entry.lang,
+      target:       entry.target,
+      firewall:     fw,
+      scraped_at:   new Date().toISOString(),
+      note:         "Data diambil langsung oleh server via inline HTML parser. Untuk data lebih lengkap, download & jalankan kode scraper dengan puppeteer.",
+      download_url: `/api/scraper/${entry.id}/download`,
+      zip_url:      `/api/scraper/${entry.id}/zip`,
+    });
+
+  } catch (err) {
+    // Jika fetch gagal (Cloudflare block, timeout, dll)
+    const fw = await detectFirewall(inputURL).catch(() => null);
+    return res.status(500).json({
+      success:    false,
+      error:      err.message,
+      url:        inputURL,
+      firewall:   fw,
+      scraper_id: entry.id,
+      fix_hint:   `Site memblokir akses langsung. Download scraper & jalankan dengan puppeteer stealth di lokal/VPS.`,
+      download:   `/api/scraper/${entry.id}/download`,
+      zip:        `/api/scraper/${entry.id}/zip`,
+    });
   }
 });
 
