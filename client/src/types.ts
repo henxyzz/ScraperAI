@@ -243,3 +243,26 @@ export interface C3SyncResult {
   syncedAt?: string;
   error?:   string;
 }
+
+// ── Prefetch / Element Scanner ────────────────────────────────
+export interface PrefetchElement {
+  category: "headings" | "text" | "links" | "images" | "tables" | "lists" | "data" | "forms" | "meta" | "structured";
+  label:    string;
+  selector: string;
+  preview:  string[];
+  count:    number;
+  target:   string;
+}
+
+export interface PrefetchResult {
+  success:      boolean;
+  url:          string;
+  host:         string;
+  title:        string;
+  layer:        number;
+  elementCount: number;
+  categories:   string[];
+  elements:     PrefetchElement[];
+  error?:       string;
+  hint?:        string;
+}

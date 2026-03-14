@@ -29,6 +29,10 @@ api.interceptors.response.use(
 export const validateKey = (provider: Provider, apiKey: string, model?: string) =>
   api.post<ValidateResult>("/api/validate", { provider, apiKey, model }).then(r => r.data);
 
+// ── Prefetch / Element Scanner ────────────────────────────────
+export const prefetchUrl = (url: string) =>
+  api.post<import("./types").PrefetchResult>("/api/prefetch", { url }, { timeout: 18000 }).then(r => r.data);
+
 // ── Templates ─────────────────────────────────────────────────
 export const getTemplates = () =>
   api.get<{ success: boolean; templates: Template[] }>("/api/templates").then(r => r.data);

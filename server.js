@@ -17,6 +17,7 @@ const { exec }          = require("child_process");
 const axios             = require("axios");
 const rateLimit         = require("express-rate-limit");
 const JSZip             = require("jszip");
+const cheerio           = require("cheerio");
 const registry          = require("./api/registry");
 
 const app     = express();
@@ -524,6 +525,287 @@ app.get("/api/scrapers/search", (req, res) => {
   res.json({ success: true, count: results.length, scrapers: results });
 });
 
+// ══════════════════════════════════════════════════════════════
+//  POST /api/prefetch
+//  Fetch URL, parse elemen HTML tanpa CSS, return element list
+//  untuk ditampilkan sebagai checkbox di step 0 generator
+// ══════════════════════════════════════════════════════════════
+app.post("/api/prefetch", async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: "url diperlukan" });
+
+  // Quick fetch — cukup layer 1 & 2
+  const axCfg = { timeout: 12000, validateStatus: () => true,
+    headers: buildHeaders({ "Referer": "https://www.google.com/" }) };
+
+  let html = null;
+  let layer = 0;
+  let fetchError = null;
+
+  // Layer 1: direct
+  try {
+    const r = await axios.get(url, axCfg);
+    if (r.status < 400 && r.data) { html = typeof r.data === "string" ? r.data : JSON.stringify(r.data); layer = 1; }
+  } catch (e) { fetchError = e.message; }
+
+  // Layer 2: rotate UA + delay
+  if (!html) {
+    try {
+      await randomDelay(400, 900);
+      const r = await axios.get(url, { ...axCfg, headers: buildHeaders({ "User-Agent": randomUA("mobile"), "Referer": "https://www.google.com/" }) });
+      if (r.status < 400 && r.data) { html = typeof r.data === "string" ? r.data : JSON.stringify(r.data); layer = 2; }
+    } catch (e) { fetchError = e.message; }
+  }
+
+  if (!html) {
+    return res.json({
+      success: false,
+      error: fetchError || "Tidak bisa fetch HTML",
+      elements: [],
+      hint: "URL mungkin memerlukan bypass. Lanjut ke Analisa untuk multi-layer fetch.",
+    });
+  }
+
+  // ── Parse elemen tanpa CSS ─────────────────────────────────
+  try {
+    // Strip semua <style> dan style= attribute sebelum load
+    const cleanHtml = html
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/\s*style\s*=\s*["'][^"']*["']/gi, "")
+      .replace(/<link[^>]+rel=["']stylesheet["'][^>]*>/gi, "");
+
+    const $ = cheerio.load(cleanHtml);
+
+    // Hapus tag non-content
+    $("script, noscript, iframe, svg, canvas, video, audio, head, meta, link").remove();
+
+    const elements = [];
+
+    // ── Headings ────────────────────────────────────────────
+    ["h1","h2","h3"].forEach(tag => {
+      const items = [];
+      $(tag).each((_, el) => {
+        const txt = $(el).text().replace(/\s+/g," ").trim();
+        if (txt.length > 1 && txt.length < 200) items.push(txt);
+      });
+      if (items.length) {
+        elements.push({
+          category: "headings",
+          label:    `${tag.toUpperCase()} (${items.length})`,
+          selector: tag,
+          preview:  items.slice(0,3),
+          count:    items.length,
+          target:   `semua teks ${tag.toUpperCase()}: ${items.slice(0,2).join(" | ")}`,
+        });
+      }
+    });
+
+    // ── Paragraphs ──────────────────────────────────────────
+    const pItems = [];
+    $("p").each((_, el) => {
+      const txt = $(el).text().replace(/\s+/g," ").trim();
+      if (txt.length > 20) pItems.push(txt.substring(0,120));
+    });
+    if (pItems.length) {
+      elements.push({
+        category: "text",
+        label:    `Paragraf / Teks (${pItems.length})`,
+        selector: "p",
+        preview:  pItems.slice(0,3),
+        count:    pItems.length,
+        target:   "konten teks / paragraf lengkap",
+      });
+    }
+
+    // ── Links ───────────────────────────────────────────────
+    const links = [];
+    $("a[href]").each((_, el) => {
+      const href = $(el).attr("href") || "";
+      const txt  = $(el).text().replace(/\s+/g," ").trim();
+      if (href && !href.startsWith("#") && txt.length > 1) links.push({ text: txt.substring(0,80), href: href.substring(0,100) });
+    });
+    if (links.length) {
+      elements.push({
+        category: "links",
+        label:    `Link / URL (${links.length})`,
+        selector: "a[href]",
+        preview:  links.slice(0,3).map(l => `${l.text} → ${l.href}`),
+        count:    links.length,
+        target:   "semua link: teks link dan URL href",
+      });
+    }
+
+    // ── Images ──────────────────────────────────────────────
+    const imgs = [];
+    $("img").each((_, el) => {
+      const src = $(el).attr("src") || $(el).attr("data-src") || $(el).attr("data-lazy-src") || "";
+      const alt = $(el).attr("alt") || "";
+      if (src) imgs.push({ src: src.substring(0,100), alt: alt.substring(0,60) });
+    });
+    if (imgs.length) {
+      elements.push({
+        category: "images",
+        label:    `Gambar / Img (${imgs.length})`,
+        selector: "img",
+        preview:  imgs.slice(0,3).map(i => `${i.alt||"(no alt)"} | ${i.src}`),
+        count:    imgs.length,
+        target:   "semua gambar: URL src, alt text, data-src",
+      });
+    }
+
+    // ── Tables ──────────────────────────────────────────────
+    const tables = [];
+    $("table").each((i, tbl) => {
+      const headers = $(tbl).find("th").map((_, el) => $(el).text().trim()).get().filter(Boolean);
+      const rows    = $(tbl).find("tr").length;
+      tables.push({ headers: headers.slice(0,6), rows });
+    });
+    if (tables.length) {
+      elements.push({
+        category: "tables",
+        label:    `Tabel (${tables.length})`,
+        selector: "table",
+        preview:  tables.slice(0,2).map(t => `${t.rows} baris | ${t.headers.join(", ") || "(no headers)"}`),
+        count:    tables.length,
+        target:   "data tabel: header kolom dan semua baris data",
+      });
+    }
+
+    // ── Lists ───────────────────────────────────────────────
+    const listItems = [];
+    $("ul li, ol li").each((_, el) => {
+      const txt = $(el).text().replace(/\s+/g," ").trim();
+      if (txt.length > 2 && txt.length < 200) listItems.push(txt.substring(0,100));
+    });
+    if (listItems.length) {
+      elements.push({
+        category: "lists",
+        label:    `List Item / li (${listItems.length})`,
+        selector: "ul li, ol li",
+        preview:  listItems.slice(0,4),
+        count:    listItems.length,
+        target:   "semua item list (li) beserta teks kontennya",
+      });
+    }
+
+    // ── Class-based data elements ───────────────────────────
+    const classGroups = {};
+    const dataKeywords = [
+      "price","harga","cost","rate","rating","review","star","score",
+      "title","name","judul","nama","product","item","card","content",
+      "desc","description","detail","date","time","tanggal","author",
+      "category","tag","label","badge","stock","stok","qty","quantity",
+    ];
+    $("[class]").each((_, el) => {
+      const cls = $(el).attr("class") || "";
+      const tag = el.tagName;
+      cls.split(/\s+/).forEach(c => {
+        if (c.length < 3 || c.length > 50) return;
+        const lower = c.toLowerCase();
+        const matched = dataKeywords.find(k => lower.includes(k));
+        if (!matched) return;
+        if (!classGroups[matched]) classGroups[matched] = { classes: new Set(), texts: [], count: 0 };
+        classGroups[matched].classes.add(`.${c}`);
+        const txt = $(el).text().replace(/\s+/g," ").trim();
+        if (txt.length > 0 && txt.length < 150) {
+          classGroups[matched].texts.push(txt.substring(0,80));
+          classGroups[matched].count++;
+        }
+      });
+    });
+
+    Object.entries(classGroups).forEach(([keyword, data]) => {
+      if (data.count < 2) return;
+      const classes = [...data.classes].slice(0,4).join(", ");
+      elements.push({
+        category: "data",
+        label:    `${keyword.charAt(0).toUpperCase()+keyword.slice(1)} elements (${data.count})`,
+        selector: classes,
+        preview:  data.texts.slice(0,3),
+        count:    data.count,
+        target:   `${keyword}: element dengan class ${classes}`,
+      });
+    });
+
+    // ── Forms & Inputs ──────────────────────────────────────
+    const formInputs = [];
+    $("input[name], select[name], textarea[name]").each((_, el) => {
+      const name = $(el).attr("name") || $(el).attr("id") || "";
+      const type = $(el).attr("type") || el.tagName;
+      if (name) formInputs.push(`${type}[${name}]`);
+    });
+    if (formInputs.length) {
+      elements.push({
+        category: "forms",
+        label:    `Form Input (${formInputs.length})`,
+        selector: "input, select, textarea",
+        preview:  formInputs.slice(0,5),
+        count:    formInputs.length,
+        target:   "struktur form dan input fields: name, type, value",
+      });
+    }
+
+    // ── Meta / SEO ──────────────────────────────────────────
+    const metas = [];
+    $("meta").each((_, el) => {
+      const name    = $(el).attr("name") || $(el).attr("property") || "";
+      const content = $(el).attr("content") || "";
+      if (name && content && content.length > 2) metas.push(`${name}: ${content.substring(0,80)}`);
+    });
+    if (metas.length) {
+      elements.push({
+        category: "meta",
+        label:    `Meta / SEO (${metas.length})`,
+        selector: "meta",
+        preview:  metas.slice(0,4),
+        count:    metas.length,
+        target:   "meta tags: title, description, og:title, og:image, keywords",
+      });
+    }
+
+    // ── JSON-LD Structured Data ──────────────────────────────
+    const jsonLds = [];
+    $("script[type='application/ld+json']").each((_, el) => {
+      try {
+        const obj  = JSON.parse($(el).text().trim());
+        const type = obj["@type"] || "Unknown";
+        jsonLds.push(type);
+      } catch {}
+    });
+    if (jsonLds.length) {
+      elements.push({
+        category: "structured",
+        label:    `JSON-LD Structured Data (${jsonLds.length})`,
+        selector: "script[type='application/ld+json']",
+        preview:  jsonLds,
+        count:    jsonLds.length,
+        target:   `JSON-LD structured data: ${jsonLds.join(", ")}`,
+      });
+    }
+
+    // ── Final response ───────────────────────────────────────
+    const host  = (() => { try { return new URL(url).hostname.replace("www.",""); } catch { return url; } })();
+    const title = (() => { try { return $("title").first().text().trim().substring(0,100); } catch { return ""; } })();
+
+    res.json({
+      success:       true,
+      url,
+      host,
+      title,
+      layer,
+      elementCount:  elements.reduce((a,e)=>a+e.count, 0),
+      categories:    [...new Set(elements.map(e=>e.category))],
+      elements,
+    });
+  } catch (parseErr) {
+    res.json({
+      success: false,
+      error:   `Parse error: ${parseErr.message}`,
+      elements: [],
+    });
+  }
+});
+
 // ── GET /api/templates ────────────────────────────────────────
 app.get("/api/templates", (req, res) => {
   const templates = [
@@ -627,16 +909,45 @@ app.post("/api/validate", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 
 const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+  // Chrome Windows
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  // Chrome macOS
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  // Firefox Windows
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
+  // Firefox macOS
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.2; rv:131.0) Gecko/20100101 Firefox/131.0",
+  // Safari macOS
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+  // Edge
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+  // Mobile Chrome Android
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.39 Mobile Safari/537.36",
+  "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.86 Mobile Safari/537.36",
+  "Mozilla/5.0 (Linux; Android 13; Redmi Note 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36",
+  // Mobile Safari iOS
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
 ];
 
-function randomUA() { return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]; }
-function sleep(ms)   { return new Promise(r => setTimeout(r, ms)); }
+const MOBILE_UAS = USER_AGENTS.filter(ua => ua.includes("Mobile") || ua.includes("Android") || ua.includes("iPhone"));
+const DESKTOP_UAS = USER_AGENTS.filter(ua => !ua.includes("Mobile") && !ua.includes("Android") && !ua.includes("iPhone"));
+
+function randomUA(type = "any") {
+  const pool = type === "mobile" ? MOBILE_UAS : type === "desktop" ? DESKTOP_UAS : USER_AGENTS;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function randomDelay(minMs = 800, maxMs = 2500) {
+  return new Promise(r => setTimeout(r, Math.floor(Math.random() * (maxMs - minMs)) + minMs));
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function buildHeaders(extra = {}) {
   return {
@@ -692,12 +1003,15 @@ async function fetchWithBypass(url, log = () => {}) {
   // ── Layer 2: Mobile UA + Referrer bypass ───────────────────
   log(" [Layer 2] Mencoba mobile user-agent + referrer trick...");
   try {
-    const mobileUA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36";
+    const mobileUA = randomUA("mobile");
     const hostname = new URL(url).hostname;
+    await randomDelay(500, 1200);
     const resp = await axios.get(url, axiosCfg(buildHeaders({
       "User-Agent": mobileUA,
       "Referer":    `https://www.google.com/search?q=${encodeURIComponent(hostname)}`,
       "Origin":     `https://${hostname}`,
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
     })));
     if (resp.status < 400 && resp.data) {
       log(` [Layer 2] Berhasil dengan mobile UA! HTTP ${resp.status}`);
@@ -709,16 +1023,26 @@ async function fetchWithBypass(url, log = () => {}) {
     log(` [Layer 2] Gagal: ${e.message}`);
     lastError = e.message;
   }
-  await sleep(600);
+  await randomDelay(800, 1800);
 
-  // ── Layer 3: Random delay + beda UA ───────────────────────
+  // ── Layer 3: Random delay + desktop UA rotate + extra headers ─
   log(" [Layer 3] Mencoba dengan random delay + rotate user-agent...");
   try {
-    await sleep(Math.random() * 1500 + 500);
+    await randomDelay(1500, 3000);
+    const desktopUA = randomUA("desktop");
+    const parsedUrl = new URL(url);
     const resp = await axios.get(url, axiosCfg(buildHeaders({
-      "Referer": "https://www.google.com/",
-      "DNT": "1",
-    }), 25000));
+      "User-Agent":       desktopUA,
+      "Referer":          "https://www.google.com/",
+      "DNT":              "1",
+      "Sec-Ch-Ua":        '"Chromium";v="131", "Not_A Brand";v="24"',
+      "Sec-Ch-Ua-Mobile": "?0",
+      "Sec-Ch-Ua-Platform": '"Windows"',
+      "Sec-Fetch-Site":   "cross-site",
+      "Sec-Fetch-Dest":   "document",
+      "Sec-Fetch-Mode":   "navigate",
+      "Cache-Control":    "no-cache",
+    }), 28000));
     if (resp.status < 400 && resp.data) {
       log(` [Layer 3] Berhasil! HTTP ${resp.status}`);
       return { html: typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data), status: resp.status, layer: 3 };
@@ -808,6 +1132,7 @@ function parseHtmlToStructure(html, url) {
     img_count: 0, link_count: 0, detected_tech: [], error: null,
   };
 
+  try {
   const $ = cheerio.load(html);
   result.title     = $("title").first().text().trim().substring(0, 120);
   result.meta_desc = ($("meta[name='description']").attr("content") || "").substring(0, 200);
@@ -892,6 +1217,12 @@ function parseHtmlToStructure(html, url) {
   $c("script,style,noscript,iframe,svg,head").remove();
   let cleaned = ($c.html() || snippet).replace(/\s{2,}/g, " ").replace(/<!--[\s\S]*?-->/g, "").trim();
   result.html_snippet = cleaned.substring(0, 8000);
+
+  } catch (parseErr) {
+    result.error = `Parse error: ${parseErr.message}`;
+    result.html_snippet = (html || "").substring(0, 2000);
+  }
+
   return result;
 }
 
@@ -1480,8 +1811,6 @@ app.post("/api/scraper/:id/try", async (req, res) => {
 
   const inputURL = req.body.target_url || req.body.video_url || req.body.post_url
     || req.body.product_url || req.body.tweet_url || req.body.url || entry.url;
-
-  const cheerio = (() => { try { return require("cheerio"); } catch { return null; } })();
 
   // ── Browser-like headers ──────────────────────────────────
   const HEADERS = {

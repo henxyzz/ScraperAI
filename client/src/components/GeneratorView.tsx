@@ -6,11 +6,11 @@ import {
   ChevronDown, ChevronUp, Activity,
 } from "lucide-react";
 import { useStore } from "../store";
-import { generateScraper, getTemplates, installDeps, getApiRoutes, createApiRoute, deleteApiRoute } from "../api";
+import { generateScraper, getTemplates, installDeps, getApiRoutes, createApiRoute, deleteApiRoute, prefetchUrl } from "../api";
 import { FirewallInfo } from "./FirewallInfo";
 import { TryOutputPanel } from "./TryOutputPanel";
 import { CodeBlock } from "./CodeBlock";
-import type { Template, Lang, ApiRoute } from "../types";
+import type { Template, Lang, ApiRoute, PrefetchElement, PrefetchResult } from "../types";
 
 type ModuleType = "commonjs" | "esm" | "esm-ts";
 interface ModuleTypeOpt { value: ModuleType; label: string; sub: string; ext: string; note: string; }
@@ -213,101 +213,20 @@ export function GeneratorView() {
 
       {/* ──── STEP 0: URL ──────────────────────────────────── */}
       {genStep===0 && (
-        <div style={{display:"flex",flexDirection:"column",gap:16}}>
-          <div className="card">
-            <div className="card-head">
-              <Globe size={14} style={{color:"var(--neon2)"}}/>
-              <span className="card-tag">Target URL</span>
-              <div className="card-dots"><span/><span/><span/></div>
-            </div>
-            <div className="card-body" style={{display:"flex",flexDirection:"column",gap:14}}>
-              <div className="field">
-                <label className="field-label">URL Website yang akan di-scrape</label>
-                <input className="field-input" type="url"
-                  placeholder="https://tokopedia.com/product, https://tiktok.com/@user, ..."
-                  value={genUrl} onChange={e=>setGenUrl(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&handleAnalyze()}/>
-              </div>
-              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                <button className="btn btn-primary" onClick={handleAnalyze} disabled={loadingAnalyze||!genUrl.trim()}>
-                  {loadingAnalyze?<><div className="spinner" style={{width:15,height:15}}/> Menganalisa...</>:<><Zap size={15}/> Analisa URL</>}
-                </button>
-                <button className="btn btn-secondary" onClick={loadTemplates}><Wand2 size={15}/> Templates</button>
-              </div>
-              {!canProceed && (
-                <div className="info-box warn"><Shield size={15}/><span>Masukkan API Key di topbar terlebih dahulu.</span></div>
-              )}
-
-              {/* ── Real-time Log Panel ── */}
-              {logs.length > 0 && (
-                <div style={{background:"rgba(0,0,0,.5)",border:"1px solid var(--border2)",borderRadius:10,overflow:"hidden"}}>
-                  <button
-                    onClick={()=>setShowLogs(p=>!p)}
-                    style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"9px 14px",
-                      background:"transparent",border:"none",cursor:"pointer",color:"var(--muted)",
-                      fontFamily:"var(--mono)",fontSize:11,textAlign:"left"}}
-                  >
-                    <Activity size={12} style={{color:loadingAnalyze?"var(--neon)":"var(--muted)"}}/>
-                    <span style={{flex:1}}>
-                      {loadingAnalyze ? "⏳ Proses berjalan..." : " Selesai"} — {logs.length} log
-                    </span>
-                    {showLogs ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
-                  </button>
-                  {showLogs && (
-                    <div ref={logRef} style={{
-                      padding:"10px 14px",maxHeight:220,overflowY:"auto",
-                      display:"flex",flexDirection:"column",gap:3,
-                    }}>
-                      {logs.map((msg,i)=>(
-                        <div key={i} style={{
-                          fontFamily:"var(--mono)",fontSize:11,lineHeight:1.6,
-                          color: msg.includes("[DONE]") || msg.includes("selesai") || msg.includes("Berhasil")
-                               ? "var(--neon)"
-                               : msg.includes("[ERR]") || msg.includes("gagal") || msg.includes("Error")
-                               ? "var(--danger)"
-                               : msg.includes("[WARN]") || msg.includes("bypass")
-                               ? "var(--warn)"
-                               : msg.includes("[AI]") || msg.includes("Analisa") || msg.includes("Memulai") || msg.includes("Fetch")
-                               ? "var(--neon2)"
-                               : "var(--text2)",
-                        }}>{msg}</div>
-                      ))}
-                      {loadingAnalyze && (
-                        <div style={{display:"flex",gap:6,alignItems:"center",marginTop:4}}>
-                          <div className="spinner" style={{width:10,height:10,borderWidth:"1.5px"}}/>
-                          <span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)"}}>memproses...</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {showTemplates && templates.length>0 && (
-            <div className="card">
-              <div className="card-head">
-                <Wand2 size={14} style={{color:"var(--neon3)"}}/>
-                <span className="card-tag">Scraper Templates</span>
-                <div className="card-dots"><span/><span/><span/></div>
-              </div>
-              <div className="card-body">
-                <div className="template-grid">
-                  {templates.map(t=>(
-                    <button key={t.id} onClick={()=>applyTemplate(t)} className="template-card">
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                        <span style={{fontFamily:"var(--mono)",fontSize:12,color:"var(--text)",fontWeight:600}}>{t.name}</span>
-                        <span className={`badge badge-${t.lang==="nodejs"?"neon":t.lang==="python"?"blue":"purple"}`}>{t.lang}</span>
-                      </div>
-                      <p style={{fontSize:11,color:"var(--muted)",lineHeight:1.5}}>{t.description}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <Step0UrlPanel
+          genUrl={genUrl} setGenUrl={setGenUrl}
+          loadingAnalyze={loadingAnalyze}
+          canProceed={canProceed}
+          handleAnalyze={handleAnalyze}
+          loadTemplates={loadTemplates}
+          showTemplates={showTemplates}
+          templates={templates}
+          applyTemplate={applyTemplate}
+          logs={logs} showLogs={showLogs} setShowLogs={setShowLogs}
+          logRef={logRef}
+          genTarget={genTarget} setGenTarget={setGenTarget}
+          addToast={addToast}
+        />
       )}
 
       {/* ──── STEP 1: ANALYZE RESULT ─────────────────────── */}
@@ -989,6 +908,363 @@ function ApiRoutesPanel({ scraperId, scraperName }:ApiRoutesPanelProps) {
               ? <><div className="spinner" style={{width:13,height:13}}/> Membuat...</>
               : <><Route size={13}/> Buat Route</>}
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Step0UrlPanel — URL input + Element Scanner dengan checkbox
+// ══════════════════════════════════════════════════════════════
+
+const CATEGORY_COLORS: Record<string,string> = {
+  headings:   "var(--neon)",
+  text:       "var(--text2)",
+  links:      "var(--neon2)",
+  images:     "var(--neon3)",
+  tables:     "var(--warn)",
+  lists:      "var(--text2)",
+  data:       "var(--neon)",
+  forms:      "var(--neon2)",
+  meta:       "var(--muted)",
+  structured: "var(--warn)",
+};
+
+const CATEGORY_LABELS: Record<string,string> = {
+  headings:   "Headings",
+  text:       "Teks",
+  links:      "Links",
+  images:     "Gambar",
+  tables:     "Tabel",
+  lists:      "List",
+  data:       "Data Element",
+  forms:      "Form",
+  meta:       "Meta/SEO",
+  structured: "Structured Data",
+};
+
+interface Step0Props {
+  genUrl: string; setGenUrl: (u:string)=>void;
+  loadingAnalyze: boolean; canProceed: boolean;
+  handleAnalyze: ()=>void;
+  loadTemplates: ()=>void; showTemplates: boolean;
+  templates: Template[]; applyTemplate: (t:Template)=>void;
+  logs: string[]; showLogs: boolean; setShowLogs: (v:boolean)=>void;
+  logRef: React.RefObject<HTMLDivElement>;
+  genTarget: string; setGenTarget: (t:string)=>void;
+  addToast: (type:any, msg:string)=>void;
+}
+
+function Step0UrlPanel({
+  genUrl, setGenUrl, loadingAnalyze, canProceed,
+  handleAnalyze, loadTemplates, showTemplates, templates, applyTemplate,
+  logs, showLogs, setShowLogs, logRef,
+  genTarget, setGenTarget, addToast,
+}: Step0Props) {
+  const [scanning,   setScanning]   = useState(false);
+  const [scanResult, setScanResult] = useState<PrefetchResult|null>(null);
+  const [checked,    setChecked]    = useState<Record<string,boolean>>({});
+  const [activeCategory, setActiveCategory] = useState<string|null>(null);
+
+  const handleScan = async () => {
+    if (!genUrl.trim()) { addToast("warn","Masukkan URL terlebih dahulu"); return; }
+    setScanning(true); setScanResult(null); setChecked({});
+    try {
+      const res = await prefetchUrl(genUrl.trim());
+      setScanResult(res);
+      if (!res.success) addToast("warn", res.error || "Scan gagal, coba Analisa langsung");
+      else {
+        addToast("success", `${res.elements.length} tipe elemen ditemukan di ${res.host}`);
+        if (res.elements.length > 0) setActiveCategory(res.elements[0].category);
+      }
+    } catch(e:any) { addToast("error", e.message); }
+    finally { setScanning(false); }
+  };
+
+  // Rebuild target dari checked elements
+  const toggleEl = (idx: string, target: string, forceVal?: boolean) => {
+    setChecked(prev => {
+      const next = { ...prev, [idx]: forceVal !== undefined ? forceVal : !prev[idx] };
+      const targets = (scanResult?.elements || [])
+        .filter((_,i) => next[String(i)])
+        .map(e => e.target);
+      setGenTarget(targets.join("; "));
+      return next;
+    });
+  };
+
+  const checkedCount = Object.values(checked).filter(Boolean).length;
+  const byCategory = scanResult
+    ? (scanResult.categories || []).reduce((acc, cat) => {
+        acc[cat] = (scanResult.elements || []).filter(e => e.category === cat);
+        return acc;
+      }, {} as Record<string, PrefetchElement[]>)
+    : {};
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      {/* ── URL Input Card ── */}
+      <div className="card">
+        <div className="card-head">
+          <Globe size={14} style={{color:"var(--neon2)"}}/>
+          <span className="card-tag">Target URL</span>
+          <div className="card-dots"><span/><span/><span/></div>
+        </div>
+        <div className="card-body" style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div className="field">
+            <label className="field-label">URL Website yang akan di-scrape</label>
+            <input className="field-input" type="url"
+              placeholder="https://tokopedia.com/product, https://tiktok.com/@user, ..."
+              value={genUrl} onChange={e=>{setGenUrl(e.target.value); setScanResult(null); setChecked({});}}
+              onKeyDown={e=>e.key==="Enter"&&handleScan()}/>
+          </div>
+
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {/* Scan Elements — tidak butuh API key */}
+            <button className="btn btn-primary" onClick={handleScan}
+              disabled={scanning||!genUrl.trim()}>
+              {scanning
+                ? <><div className="spinner" style={{width:14,height:14}}/> Scanning...</>
+                : <><Box size={14}/> Scan Elemen</>}
+            </button>
+
+            {/* Langsung analisa AI */}
+            <button className="btn btn-secondary" onClick={handleAnalyze}
+              disabled={loadingAnalyze||!genUrl.trim()}>
+              {loadingAnalyze
+                ? <><div className="spinner" style={{width:14,height:14}}/> Menganalisa...</>
+                : <><Zap size={14}/> Analisa dengan AI</>}
+            </button>
+
+            <button className="btn btn-secondary" onClick={loadTemplates}>
+              <Wand2 size={14}/> Templates
+            </button>
+          </div>
+
+          {!canProceed && (
+            <div className="info-box warn">
+              <Shield size={14}/>
+              <span style={{fontSize:12}}>Scan Elemen tidak butuh API key. Untuk Analisa AI, masukkan API key di topbar.</span>
+            </div>
+          )}
+
+          {/* SSE Logs */}
+          {logs.length > 0 && (
+            <div style={{background:"rgba(0,0,0,.4)",border:"1px solid var(--border2)",borderRadius:9,overflow:"hidden"}}>
+              <button onClick={()=>setShowLogs(p=>!p)}
+                style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 13px",
+                  background:"transparent",border:"none",cursor:"pointer",color:"var(--muted)",
+                  fontFamily:"var(--mono)",fontSize:10,textAlign:"left"}}>
+                <Activity size={11} style={{color:loadingAnalyze?"var(--neon)":"var(--muted)"}}/>
+                <span style={{flex:1}}>
+                  {loadingAnalyze ? "Proses berjalan..." : "Selesai"} — {logs.length} log
+                </span>
+                {showLogs ? <ChevronUp size={11}/> : <ChevronDown size={11}/>}
+              </button>
+              {showLogs && (
+                <div ref={logRef} style={{padding:"8px 13px",maxHeight:180,overflowY:"auto",display:"flex",flexDirection:"column",gap:2}}>
+                  {logs.map((msg,i)=>(
+                    <div key={i} style={{fontFamily:"var(--mono)",fontSize:10.5,lineHeight:1.55,
+                      color: msg.includes("selesai")||msg.includes("Berhasil") ? "var(--neon)"
+                           : msg.includes("gagal")||msg.includes("Error")     ? "var(--danger)"
+                           : msg.includes("bypass")||msg.includes("Layer")    ? "var(--warn)"
+                           : msg.includes("AI")||msg.includes("Analisa")      ? "var(--neon2)"
+                           : "var(--text2)"}}>
+                      {msg}
+                    </div>
+                  ))}
+                  {loadingAnalyze && (
+                    <div style={{display:"flex",gap:6,alignItems:"center",marginTop:3}}>
+                      <div className="spinner" style={{width:9,height:9,borderWidth:"1.5px"}}/>
+                      <span style={{fontFamily:"var(--mono)",fontSize:9.5,color:"var(--muted)"}}>memproses...</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Element Scanner Result ── */}
+      {scanResult && scanResult.success && scanResult.elements.length > 0 && (
+        <div className="card">
+          <div className="card-head">
+            <CheckSquare size={14} style={{color:"var(--neon)"}}/>
+            <span className="card-tag">Pilih Elemen yang Mau Di-scrape</span>
+            {checkedCount > 0 && (
+              <span style={{marginLeft:6,fontFamily:"var(--mono)",fontSize:10,
+                background:"rgba(46,255,168,.12)",color:"var(--neon)",
+                padding:"2px 8px",borderRadius:4,border:"1px solid rgba(46,255,168,.25)"}}>
+                {checkedCount} dipilih
+              </span>
+            )}
+            <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+              <button className="btn btn-ghost btn-sm" onClick={()=>{
+                const all: Record<string,boolean> = {};
+                scanResult.elements.forEach((_,i)=>{ all[String(i)]=true; });
+                setChecked(all);
+                setGenTarget(scanResult.elements.map(e=>e.target).join("; "));
+              }}>Pilih Semua</button>
+              <button className="btn btn-ghost btn-sm" onClick={()=>{
+                setChecked({}); setGenTarget("");
+              }}>Clear</button>
+            </div>
+            <div className="card-dots"><span/><span/><span/></div>
+          </div>
+
+          {/* Site info */}
+          <div style={{padding:"10px 18px",borderBottom:"1px solid var(--border)",
+            display:"flex",gap:16,alignItems:"center",background:"rgba(0,0,0,.2)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:7}}>
+              <Globe size={11} style={{color:"var(--muted)"}}/>
+              <span style={{fontFamily:"var(--mono)",fontSize:11,color:"var(--neon2)"}}>{scanResult.host}</span>
+            </div>
+            {scanResult.title && (
+              <span style={{fontSize:12,color:"var(--text2)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:320}}>
+                {scanResult.title}
+              </span>
+            )}
+            <span style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",marginLeft:"auto"}}>
+              Layer {scanResult.layer} — {scanResult.elementCount} elemen ditemukan
+            </span>
+          </div>
+
+          <div style={{display:"flex",height:"auto"}}>
+            {/* Category tabs - left */}
+            <div style={{width:150,flexShrink:0,borderRight:"1px solid var(--border)",
+              display:"flex",flexDirection:"column",padding:"8px 6px",gap:2}}>
+              {Object.keys(byCategory).map(cat => {
+                const items = byCategory[cat];
+                const catChecked = items.filter((_,i) => {
+                  const globalIdx = scanResult.elements.findIndex(e=>e===items[i]);
+                  return checked[String(globalIdx)];
+                }).length;
+                return (
+                  <button key={cat} onClick={()=>setActiveCategory(cat)}
+                    style={{display:"flex",alignItems:"center",gap:7,padding:"7px 9px",borderRadius:8,
+                      background:activeCategory===cat?"rgba(46,255,168,.07)":"transparent",
+                      border:`1px solid ${activeCategory===cat?"rgba(46,255,168,.2)":"transparent"}`,
+                      cursor:"pointer",textAlign:"left",transition:"all .15s"}}>
+                    <span style={{width:7,height:7,borderRadius:"50%",flexShrink:0,
+                      background:CATEGORY_COLORS[cat]||"var(--muted)"}}/>
+                    <span style={{fontFamily:"var(--mono)",fontSize:10,
+                      color:activeCategory===cat?"var(--neon)":"var(--text2)",flex:1,
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {CATEGORY_LABELS[cat]||cat}
+                    </span>
+                    <span style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--muted)"}}>
+                      {catChecked>0 ? <span style={{color:"var(--neon)"}}>{catChecked}/</span> : ""}{items.length}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Elements list - right */}
+            <div style={{flex:1,padding:"12px 14px",display:"flex",flexDirection:"column",gap:8,
+              maxHeight:380,overflowY:"auto"}}>
+              {activeCategory && byCategory[activeCategory]
+                ? byCategory[activeCategory].map((el) => {
+                    const globalIdx = String(scanResult.elements.indexOf(el));
+                    const isChecked = !!checked[globalIdx];
+                    return (
+                      <label key={globalIdx} style={{display:"flex",gap:10,alignItems:"flex-start",
+                        padding:"10px 12px",borderRadius:9,cursor:"pointer",
+                        background:isChecked?"rgba(46,255,168,.05)":"rgba(0,0,0,.25)",
+                        border:`1px solid ${isChecked?"rgba(46,255,168,.25)":"var(--border)"}`,
+                        transition:"all .15s"}}>
+                        <input type="checkbox" checked={isChecked}
+                          onChange={()=>toggleEl(globalIdx, el.target)}
+                          style={{accentColor:"var(--neon)",marginTop:2,flexShrink:0}}/>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                            <span style={{fontFamily:"var(--mono)",fontSize:11,fontWeight:600,
+                              color:isChecked?"var(--neon)":"var(--text)"}}>
+                              {el.label}
+                            </span>
+                            <code style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--muted)",
+                              background:"rgba(0,0,0,.4)",padding:"1px 6px",borderRadius:3}}>
+                              {el.selector.length>30 ? el.selector.substring(0,30)+"…" : el.selector}
+                            </code>
+                          </div>
+                          {/* Preview items */}
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            {el.preview.slice(0,3).map((p,pi)=>(
+                              <div key={pi} style={{fontSize:11,color:"var(--text2)",
+                                fontFamily:"var(--mono)",lineHeight:1.4,
+                                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                                paddingLeft:4,borderLeft:"2px solid var(--border2)"}}>
+                                {p}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })
+                : <div style={{color:"var(--muted)",fontSize:12,padding:16}}>Pilih kategori di kiri</div>
+              }
+            </div>
+          </div>
+
+          {/* Target preview + Analisa button */}
+          {checkedCount > 0 && (
+            <div style={{padding:"12px 18px",borderTop:"1px solid var(--border)",
+              display:"flex",gap:12,alignItems:"flex-start",background:"rgba(0,0,0,.2)"}}>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"var(--mono)",fontSize:9,color:"var(--muted)",
+                  textTransform:"uppercase",letterSpacing:1.5,marginBottom:5}}>
+                  Target yang akan di-scrape
+                </div>
+                <div style={{fontSize:12,color:"var(--text2)",lineHeight:1.55}}>
+                  {genTarget.substring(0,200)}{genTarget.length>200?"…":""}
+                </div>
+              </div>
+              <button className="btn btn-primary" onClick={handleAnalyze}
+                disabled={loadingAnalyze||!canProceed}>
+                {loadingAnalyze
+                  ? <><div className="spinner" style={{width:14,height:14}}/> Menganalisa...</>
+                  : <><Zap size={14}/> Analisa dengan AI</>}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Scan failed fallback */}
+      {scanResult && !scanResult.success && (
+        <div className="info-box warn">
+          <Shield size={14}/>
+          <div>
+            <div style={{fontSize:12,fontWeight:600}}>{scanResult.error}</div>
+            {scanResult.hint && <div style={{fontSize:11,marginTop:3,color:"var(--text2)"}}>{scanResult.hint}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* Templates */}
+      {showTemplates && templates.length>0 && (
+        <div className="card">
+          <div className="card-head">
+            <Wand2 size={14} style={{color:"var(--neon3)"}}/>
+            <span className="card-tag">Scraper Templates</span>
+            <div className="card-dots"><span/><span/><span/></div>
+          </div>
+          <div className="card-body">
+            <div className="template-grid">
+              {templates.map(t=>(
+                <button key={t.id} onClick={()=>applyTemplate(t)} className="template-card">
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <span style={{fontFamily:"var(--mono)",fontSize:12,color:"var(--text)",fontWeight:600}}>{t.name}</span>
+                    <span className={`badge badge-${t.lang==="nodejs"?"neon":t.lang==="python"?"blue":"purple"}`}>{t.lang}</span>
+                  </div>
+                  <p style={{fontSize:11,color:"var(--muted)",lineHeight:1.5}}>{t.description}</p>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
