@@ -1,4 +1,5 @@
 import { Zap, Code2, Wrench, BookOpen, Terminal } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useStore } from "./store";
 import { ProviderBar } from "./components/ProviderBar";
 import { GeneratorView } from "./components/GeneratorView";
@@ -11,7 +12,7 @@ import type { View } from "./types";
 interface NavItem {
   id:    View;
   label: string;
-  Icon:  React.FC<{ size?: number }>;
+  Icon:  LucideIcon;
 }
 
 const NAV_ITEMS: NavItem[] = [
