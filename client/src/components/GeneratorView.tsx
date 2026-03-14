@@ -90,7 +90,7 @@ export function GeneratorView() {
       try {
         const d = JSON.parse((e as any).data || "{}");
         addToast("error", d.msg || "Gagal analisa URL");
-        setLogs(p => [...p, `❌ Error: ${d.msg}`]);
+        setLogs(p => [...p, ` Error: ${d.msg}`]);
       } catch {
         addToast("error", "Koneksi SSE terputus");
       }
@@ -167,7 +167,7 @@ export function GeneratorView() {
       try {
         const d = JSON.parse((e as any).data || "{}");
         addToast("error", d.msg || "Gagal generate scraper");
-        setGenLogs(p => [...p, `❌ Error: ${d.msg}`]);
+        setGenLogs(p => [...p, ` Error: ${d.msg}`]);
       } catch {
         addToast("error", "Koneksi SSE error saat generate");
       }
@@ -249,7 +249,7 @@ export function GeneratorView() {
                   >
                     <Activity size={12} style={{color:loadingAnalyze?"var(--neon)":"var(--muted)"}}/>
                     <span style={{flex:1}}>
-                      {loadingAnalyze ? "⏳ Proses berjalan..." : "✅ Selesai"} — {logs.length} log
+                      {loadingAnalyze ? "⏳ Proses berjalan..." : " Selesai"} — {logs.length} log
                     </span>
                     {showLogs ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
                   </button>
@@ -261,10 +261,14 @@ export function GeneratorView() {
                       {logs.map((msg,i)=>(
                         <div key={i} style={{
                           fontFamily:"var(--mono)",fontSize:11,lineHeight:1.6,
-                          color: msg.startsWith("✅")?"var(--neon)"
-                               : msg.startsWith("❌")?"var(--danger)"
-                               : msg.startsWith("⚠️")?"var(--warn)"
-                               : msg.startsWith("🔵")?"var(--neon2)"
+                          color: msg.includes("[DONE]") || msg.includes("selesai") || msg.includes("Berhasil")
+                               ? "var(--neon)"
+                               : msg.includes("[ERR]") || msg.includes("gagal") || msg.includes("Error")
+                               ? "var(--danger)"
+                               : msg.includes("[WARN]") || msg.includes("bypass")
+                               ? "var(--warn)"
+                               : msg.includes("[AI]") || msg.includes("Analisa") || msg.includes("Memulai") || msg.includes("Fetch")
+                               ? "var(--neon2)"
                                : "var(--text2)",
                         }}>{msg}</div>
                       ))}
@@ -332,11 +336,11 @@ export function GeneratorView() {
                   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:6}}>
                     <span style={{fontFamily:"var(--mono)",fontSize:10,letterSpacing:1,
                       color:genAnalysis.html_info.fetched?"var(--neon)":"var(--warn)"}}>
-                      {genAnalysis.html_info.fetched?"✅ HTML BERHASIL DI-FETCH":"⚠️ HTML TIDAK BISA DI-FETCH"}
+                      {genAnalysis.html_info.fetched?" HTML BERHASIL DI-FETCH":" HTML TIDAK BISA DI-FETCH"}
                     </span>
                     {genAnalysis.html_info.status_code&&<span className="badge badge-neutral" style={{fontSize:9}}>HTTP {genAnalysis.html_info.status_code}</span>}
-                    {genAnalysis.html_info.has_json_ld&&<span className="badge badge-neon" style={{fontSize:9}}>JSON-LD ✓</span>}
-                    {genAnalysis.html_info.has_next_data&&<span className="badge badge-blue" style={{fontSize:9}}>__NEXT_DATA__ ✓</span>}
+                    {genAnalysis.html_info.has_json_ld&&<span className="badge badge-neon" style={{fontSize:9}}>JSON-LD </span>}
+                    {genAnalysis.html_info.has_next_data&&<span className="badge badge-blue" style={{fontSize:9}}>__NEXT_DATA__ </span>}
                     {genAnalysis.html_info.fetch_error&&<span style={{fontSize:11,color:"var(--warn)"}}>— {genAnalysis.html_info.fetch_error}</span>}
                   </div>
                   {genAnalysis.html_info.detected_tech.length>0&&(
@@ -348,9 +352,9 @@ export function GeneratorView() {
                     </div>
                   )}
                   <div style={{display:"flex",gap:12,fontSize:11,color:"var(--muted)"}}>
-                    {genAnalysis.html_info.title&&<span>📄 {genAnalysis.html_info.title.substring(0,60)}</span>}
-                    <span>🖼 {genAnalysis.html_info.img_count} img</span>
-                    <span>🔗 {genAnalysis.html_info.link_count} link</span>
+                    {genAnalysis.html_info.title&&<span> {genAnalysis.html_info.title.substring(0,60)}</span>}
+                    <span> {genAnalysis.html_info.img_count} img</span>
+                    <span> {genAnalysis.html_info.link_count} link</span>
                   </div>
                 </div>
               )}
@@ -359,7 +363,7 @@ export function GeneratorView() {
               {genAnalysis.ai.scraping_strategy&&(
                 <div style={{background:"rgba(0,194,255,.05)",border:"1px solid rgba(0,194,255,.18)",borderRadius:9,padding:"10px 14px"}}>
                   <div style={{fontFamily:"var(--mono)",fontSize:10,color:"var(--neon2)",letterSpacing:1,textTransform:"uppercase",marginBottom:5}}>
-                    💡 Strategi Scraping
+                     Strategi Scraping
                   </div>
                   <p style={{fontSize:12.5,color:"var(--text2)",lineHeight:1.7}}>{genAnalysis.ai.scraping_strategy}</p>
                   {genAnalysis.ai.css_selectors?.selectors&&genAnalysis.ai.css_selectors.selectors.length>0&&(
@@ -443,7 +447,7 @@ export function GeneratorView() {
                             {rec.packages.map(pkg=>(<span key={pkg} className="module-pkg-badge"><Package size={9}/>{pkg}</span>))}
                           </div>
                         </div>
-                        <p style={{fontSize:11,color:"var(--text2)",marginBottom:6}}>💡 {rec.reason}</p>
+                        <p style={{fontSize:11,color:"var(--text2)",marginBottom:6}}> {rec.reason}</p>
                         <code className="module-cmd" style={{fontSize:10}}>{rec.install_cmd}</code>
                       </div>
                     );
@@ -505,7 +509,7 @@ export function GeneratorView() {
                       <span className="lang-opt-label">{l.label}</span>
                       <span className="lang-opt-sub">{l.sub}</span>
                       {genAnalysis?.ai?.recommended_modules?.[l.value] && (
-                        <span style={{fontSize:9,color:"var(--neon3)",fontFamily:"var(--mono)",marginTop:2}}>AI rec ✓</span>
+                        <span style={{fontSize:9,color:"var(--neon3)",fontFamily:"var(--mono)",marginTop:2}}>AI rec </span>
                       )}
                     </button>
                   ))}
@@ -583,7 +587,7 @@ export function GeneratorView() {
               >
                 <Activity size={12} style={{color:loadingGenerate?"var(--neon)":"var(--muted)"}}/>
                 <span style={{flex:1}}>
-                  {loadingGenerate ? "⏳ AI sedang generate..." : "✅ Generate selesai"} — {genLogs.length} log
+                  {loadingGenerate ? "⏳ AI sedang generate..." : " Generate selesai"} — {genLogs.length} log
                 </span>
                 {showGenLogs ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
               </button>
@@ -595,11 +599,14 @@ export function GeneratorView() {
                   {genLogs.map((msg,i)=>(
                     <div key={i} style={{
                       fontFamily:"var(--mono)",fontSize:11,lineHeight:1.6,
-                      color: msg.startsWith("✅")?"var(--neon)"
-                           : msg.startsWith("❌")?"var(--danger)"
-                           : msg.startsWith("⚠️")?"var(--warn)"
-                           : msg.startsWith("🎉")?"var(--neon)"
-                           : msg.startsWith("🤖")||msg.startsWith("🚀")||msg.startsWith("🌐")||msg.startsWith("🎯")?"var(--neon2)"
+                      color: msg.includes("[DONE]") || msg.includes("selesai") || msg.includes("Berhasil")
+                           ? "var(--neon)"
+                           : msg.includes("[ERR]") || msg.includes("gagal") || msg.includes("Error")
+                           ? "var(--danger)"
+                           : msg.includes("[WARN]") || msg.includes("bypass") || msg.includes("Proteksi")
+                           ? "var(--warn)"
+                           : msg.includes("[AI]") || msg.includes("Analisa") || msg.includes("Generate") || msg.includes("Fetch")
+                           ? "var(--neon2)"
                            : "var(--text2)",
                     }}>{msg}</div>
                   ))}
@@ -845,7 +852,7 @@ function ApiRoutesPanel({ scraperId, scraperName }:ApiRoutesPanelProps) {
             <button onClick={()=>handleDelete(route.id)} style={{
               background:"transparent",border:"1px solid rgba(255,69,96,.2)",borderRadius:5,
               padding:"3px 8px",color:"var(--danger)",fontFamily:"var(--mono)",fontSize:10,cursor:"pointer",
-            }}>✕</button>
+            }}></button>
           </div>
           {route.description && <p style={{fontSize:12,color:"var(--text2)",marginBottom:10}}>{route.description}</p>}
 
@@ -907,7 +914,7 @@ function ApiRoutesPanel({ scraperId, scraperName }:ApiRoutesPanelProps) {
               color:testResults[route.id].ok?"var(--neon)":"var(--danger)",
             }}>
               {testResults[route.id].error
-                ? `❌ ${testResults[route.id].error}`
+                ? ` ${testResults[route.id].error}`
                 : `HTTP ${testResults[route.id].status}\n${JSON.stringify(testResults[route.id].data,null,2)}`}
             </div>
           )}
@@ -972,7 +979,7 @@ function ApiRoutesPanel({ scraperId, scraperName }:ApiRoutesPanelProps) {
                   </label>
                   <input className="field-input" style={{flex:3,fontSize:11}} placeholder="deskripsi"
                     value={p.description} onChange={e=>updateParam(i,"description",e.target.value)}/>
-                  <button onClick={()=>removeParam(i)} style={{background:"transparent",border:"none",color:"var(--danger)",cursor:"pointer",fontSize:16,lineHeight:1,flexShrink:0}}>✕</button>
+                  <button onClick={()=>removeParam(i)} style={{background:"transparent",border:"none",color:"var(--danger)",cursor:"pointer",fontSize:16,lineHeight:1,flexShrink:0}}></button>
                 </div>
               ))}
             </div>

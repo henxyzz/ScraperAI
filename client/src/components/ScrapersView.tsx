@@ -227,7 +227,7 @@ export function ScrapersView() {
               <Code2 size={14} style={{ color: "var(--neon)" }} />
               <span className="card-tag">{selected.name}</span>
               <button className="btn-icon" style={{ marginLeft: "auto" }} onClick={() => setSelected(null)}>
-                ✕
+                
               </button>
             </div>
             <div className="card-body">

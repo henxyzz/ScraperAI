@@ -674,23 +674,23 @@ async function fetchWithBypass(url, log = () => {}) {
   let lastError = null;
 
   // ── Layer 1: Direct fetch ──────────────────────────────────
-  log("🔵 [Layer 1] Mencoba fetch langsung...");
+  log(" [Layer 1] Mencoba fetch langsung...");
   try {
     const resp = await axios.get(url, axiosCfg(buildHeaders()));
     if (resp.status < 400 && resp.data) {
-      log(`✅ [Layer 1] Berhasil! HTTP ${resp.status}`);
+      log(` [Layer 1] Berhasil! HTTP ${resp.status}`);
       return { html: typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data), status: resp.status, layer: 1 };
     }
-    log(`⚠️ [Layer 1] HTTP ${resp.status} — mencoba layer berikutnya`);
+    log(` [Layer 1] HTTP ${resp.status} — mencoba layer berikutnya`);
     lastError = `HTTP ${resp.status}`;
   } catch (e) {
-    log(`⚠️ [Layer 1] Gagal: ${e.message}`);
+    log(` [Layer 1] Gagal: ${e.message}`);
     lastError = e.message;
   }
   await sleep(400);
 
   // ── Layer 2: Mobile UA + Referrer bypass ───────────────────
-  log("🔵 [Layer 2] Mencoba mobile user-agent + referrer trick...");
+  log(" [Layer 2] Mencoba mobile user-agent + referrer trick...");
   try {
     const mobileUA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36";
     const hostname = new URL(url).hostname;
@@ -700,19 +700,19 @@ async function fetchWithBypass(url, log = () => {}) {
       "Origin":     `https://${hostname}`,
     })));
     if (resp.status < 400 && resp.data) {
-      log(`✅ [Layer 2] Berhasil dengan mobile UA! HTTP ${resp.status}`);
+      log(` [Layer 2] Berhasil dengan mobile UA! HTTP ${resp.status}`);
       return { html: typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data), status: resp.status, layer: 2 };
     }
-    log(`⚠️ [Layer 2] HTTP ${resp.status}`);
+    log(` [Layer 2] HTTP ${resp.status}`);
     lastError = `HTTP ${resp.status}`;
   } catch (e) {
-    log(`⚠️ [Layer 2] Gagal: ${e.message}`);
+    log(` [Layer 2] Gagal: ${e.message}`);
     lastError = e.message;
   }
   await sleep(600);
 
   // ── Layer 3: Random delay + beda UA ───────────────────────
-  log("🔵 [Layer 3] Mencoba dengan random delay + rotate user-agent...");
+  log(" [Layer 3] Mencoba dengan random delay + rotate user-agent...");
   try {
     await sleep(Math.random() * 1500 + 500);
     const resp = await axios.get(url, axiosCfg(buildHeaders({
@@ -720,17 +720,17 @@ async function fetchWithBypass(url, log = () => {}) {
       "DNT": "1",
     }), 25000));
     if (resp.status < 400 && resp.data) {
-      log(`✅ [Layer 3] Berhasil! HTTP ${resp.status}`);
+      log(` [Layer 3] Berhasil! HTTP ${resp.status}`);
       return { html: typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data), status: resp.status, layer: 3 };
     }
-    log(`⚠️ [Layer 3] HTTP ${resp.status}`);
+    log(` [Layer 3] HTTP ${resp.status}`);
   } catch (e) {
-    log(`⚠️ [Layer 3] Gagal: ${e.message}`);
+    log(` [Layer 3] Gagal: ${e.message}`);
     lastError = e.message;
   }
 
   // ── Layer 4: Google Cache / AMP ────────────────────────────
-  log("🔵 [Layer 4] Mencoba Google Cache fallback...");
+  log(" [Layer 4] Mencoba Google Cache fallback...");
   try {
     const encoded  = encodeURIComponent(url);
     const cacheUrl = `https://webcache.googleusercontent.com/search?q=cache:${encoded}`;
@@ -738,16 +738,16 @@ async function fetchWithBypass(url, log = () => {}) {
       "Referer": "https://www.google.com/",
     }), 15000));
     if (resp.status === 200 && typeof resp.data === "string" && resp.data.length > 500) {
-      log(`✅ [Layer 4] Berhasil via Google Cache!`);
+      log(` [Layer 4] Berhasil via Google Cache!`);
       return { html: resp.data, status: 200, layer: 4, note: "dari Google Cache" };
     }
-    log(`⚠️ [Layer 4] Cache tidak tersedia`);
+    log(` [Layer 4] Cache tidak tersedia`);
   } catch (e) {
-    log(`⚠️ [Layer 4] Google Cache gagal: ${e.message}`);
+    log(` [Layer 4] Google Cache gagal: ${e.message}`);
   }
 
   // ── Layer 5: Wayback Machine ───────────────────────────────
-  log("🔵 [Layer 5] Mencoba Wayback Machine (web.archive.org)...");
+  log(" [Layer 5] Mencoba Wayback Machine (web.archive.org)...");
   try {
     const avail = await axios.get(
       `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`,
@@ -758,18 +758,18 @@ async function fetchWithBypass(url, log = () => {}) {
       log(`   Snapshot ditemukan: ${snapUrl.substring(0, 70)}...`);
       const snap = await axios.get(snapUrl, axiosCfg(buildHeaders(), 20000));
       if (snap.status === 200 && snap.data) {
-        log(`✅ [Layer 5] Berhasil via Wayback Machine!`);
+        log(` [Layer 5] Berhasil via Wayback Machine!`);
         return { html: typeof snap.data === "string" ? snap.data : JSON.stringify(snap.data), status: 200, layer: 5, note: "dari Wayback Machine" };
       }
     } else {
-      log(`⚠️ [Layer 5] Tidak ada snapshot Wayback Machine`);
+      log(` [Layer 5] Tidak ada snapshot Wayback Machine`);
     }
   } catch (e) {
-    log(`⚠️ [Layer 5] Wayback Machine gagal: ${e.message}`);
+    log(` [Layer 5] Wayback Machine gagal: ${e.message}`);
   }
 
   // ── Layer 6: iframe/embed via alternate URL format ──────────
-  log("🔵 [Layer 6] Mencoba variasi URL (www, http, path alternatif)...");
+  log(" [Layer 6] Mencoba variasi URL (www, http, path alternatif)...");
   try {
     const parsed = new URL(url);
     const altUrls = [
@@ -782,17 +782,17 @@ async function fetchWithBypass(url, log = () => {}) {
       try {
         const resp = await axios.get(altUrl, axiosCfg(buildHeaders(), 12000));
         if (resp.status < 400 && resp.data) {
-          log(`✅ [Layer 6] Berhasil via URL alternatif: ${altUrl.substring(0,50)}`);
+          log(` [Layer 6] Berhasil via URL alternatif: ${altUrl.substring(0,50)}`);
           return { html: typeof resp.data === "string" ? resp.data : JSON.stringify(resp.data), status: resp.status, layer: 6 };
         }
       } catch {}
     }
-    log(`⚠️ [Layer 6] Semua URL alternatif gagal`);
+    log(` [Layer 6] Semua URL alternatif gagal`);
   } catch (e) {
-    log(`⚠️ [Layer 6] Error: ${e.message}`);
+    log(` [Layer 6] Error: ${e.message}`);
   }
 
-  log(`❌ Semua ${6} layer bypass gagal. Error terakhir: ${lastError}`);
+  log(` Semua ${6} layer bypass gagal. Error terakhir: ${lastError}`);
   return { html: null, status: null, layer: null, error: lastError || "Semua strategi bypass gagal" };
 }
 
@@ -919,35 +919,35 @@ app.get("/api/analyze/stream", async (req, res) => {
   const fail = (err)    => send("error",  { msg: err });
 
   try {
-    log(`🚀 Memulai analisa untuk: ${url}`);
-    log(`🤖 AI Provider: ${provider}`);
+    log(` Memulai analisa untuk: ${url}`);
+    log(` AI Provider: ${provider}`);
 
     // Step 1: Firewall detection
-    log("🛡️ Mendeteksi proteksi firewall...");
+    log(" Mendeteksi proteksi firewall...");
     const fw = await detectFirewall(url);
-    if (fw.cloudflare)     log("⚠️  Terdeteksi: Cloudflare");
-    if (fw.waf)            log("⚠️  Terdeteksi: WAF (Web Application Firewall)");
-    if (fw.bot_protection) log("⚠️  Terdeteksi: Bot Protection");
-    if (!fw.bypass_recommended) log("✅ Tidak ada proteksi khusus terdeteksi");
+    if (fw.cloudflare)     log("  Terdeteksi: Cloudflare");
+    if (fw.waf)            log("  Terdeteksi: WAF (Web Application Firewall)");
+    if (fw.bot_protection) log("  Terdeteksi: Bot Protection");
+    if (!fw.bypass_recommended) log(" Tidak ada proteksi khusus terdeteksi");
 
     // Step 2: Fetch HTML with bypass
-    log("🌐 Memulai fetch HTML...");
+    log(" Memulai fetch HTML...");
     const fetchResult = await fetchWithBypass(url, log);
 
     let htmlData;
     if (fetchResult.html) {
-      log(`🔍 Parsing struktur HTML (layer ${fetchResult.layer})...`);
-      if (fetchResult.note) log(`   ℹ️  ${fetchResult.note}`);
+      log(` Parsing struktur HTML (layer ${fetchResult.layer})...`);
+      if (fetchResult.note) log(`   ℹ  ${fetchResult.note}`);
       htmlData = parseHtmlToStructure(fetchResult.html, url);
       htmlData.statusCode = fetchResult.status;
-      log(`   📄 Title: ${htmlData.title || "(tidak ada)"}`);
-      log(`   🔧 Teknologi: ${htmlData.detected_tech.join(", ") || "Standar HTML"}`);
-      log(`   🖼  Gambar: ${htmlData.img_count} | 🔗 Link: ${htmlData.link_count}`);
-      if (htmlData.json_ld)   log("   ✅ JSON-LD Structured Data ditemukan");
-      if (htmlData.next_data) log("   ✅ __NEXT_DATA__ (Next.js) ditemukan");
-      if (htmlData.class_samples.length) log(`   🎨 ${htmlData.class_samples.length} CSS class terdeteksi`);
+      log(`    Title: ${htmlData.title || "(tidak ada)"}`);
+      log(`    Teknologi: ${htmlData.detected_tech.join(", ") || "Standar HTML"}`);
+      log(`     Gambar: ${htmlData.img_count} |  Link: ${htmlData.link_count}`);
+      if (htmlData.json_ld)   log("    JSON-LD Structured Data ditemukan");
+      if (htmlData.next_data) log("    __NEXT_DATA__ (Next.js) ditemukan");
+      if (htmlData.class_samples.length) log(`    ${htmlData.class_samples.length} CSS class terdeteksi`);
     } else {
-      log(`❌ Fetch gagal setelah semua layer: ${fetchResult.error}`);
+      log(` Fetch gagal setelah semua layer: ${fetchResult.error}`);
       log("   AI akan tetap analisa berdasarkan URL dan informasi firewall");
       htmlData = {
         fetched: false, statusCode: fetchResult.status, html_snippet: "",
@@ -960,7 +960,7 @@ app.get("/api/analyze/stream", async (req, res) => {
     }
 
     // Step 3: AI Analyze
-    log("🤖 Memulai analisa AI...");
+    log(" Memulai analisa AI...");
     const needsBypass = fw.bypass_recommended ||
       htmlData.detected_tech.some(t => ["Next.js","React","Angular","Vue.js","Infinite Scroll","SvelteKit","Nuxt.js"].includes(t));
 
@@ -1017,9 +1017,9 @@ Balas HANYA JSON valid tanpa markdown:
     let parsed;
     try {
       parsed = JSON.parse(clean);
-      log(`✅ Analisa selesai! Site type: ${parsed.site_type || "unknown"}, Kompleksitas: ${parsed.complexity || "?"}`);
+      log(` Analisa selesai! Site type: ${parsed.site_type || "unknown"}, Kompleksitas: ${parsed.complexity || "?"}`);
     } catch {
-      log("⚠️  JSON parse gagal, menggunakan fallback analisa");
+      log("  JSON parse gagal, menggunakan fallback analisa");
       const host = (() => { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } })();
       const isEcomm = ["shopee","tokopedia","lazada","amazon"].some(s => host.includes(s));
       parsed = {
@@ -1054,7 +1054,7 @@ Balas HANYA JSON valid tanpa markdown:
       bypass_layer: fetchResult?.layer || null,
     };
 
-    log("✅ Semua proses selesai! Memuat hasil...");
+    log(" Semua proses selesai! Memuat hasil...");
     done({ success: true, url, firewall: fw, ai: parsed, html_info });
 
   } catch (e) {
@@ -1088,13 +1088,13 @@ app.get("/api/generate/stream", async (req, res) => {
   const bCF = bypassCF === "true";
 
   try {
-    log(`🚀 Generate ${langLabel[lang]} scraper dimulai`);
-    log(`🌐 Target URL: ${url}`);
-    log(`🎯 Data yang di-scrape: ${target}`);
-    log(`🔓 Bypass CF: ${bCF ? "AKTIF" : "Tidak aktif"}`);
-    if (moduleType && lang === "nodejs") log(`📦 Module type: ${moduleType}`);
+    log(` Generate ${langLabel[lang]} scraper dimulai`);
+    log(` Target URL: ${url}`);
+    log(` Data yang di-scrape: ${target}`);
+    log(` Bypass CF: ${bCF ? "AKTIF" : "Tidak aktif"}`);
+    if (moduleType && lang === "nodejs") log(` Module type: ${moduleType}`);
 
-    log("🤖 Mengirim request ke AI provider...");
+    log(" Mengirim request ke AI provider...");
     log("   Ini bisa memakan waktu 30–90 detik, harap tunggu...");
 
     const SHARED_RULES = `
@@ -1159,9 +1159,9 @@ PENTING: Tulis SEMUA kode dari awal sampai akhir. JANGAN potong atau skip bagian
       return raw.replace(/^```[\w]*\n?/gm, "").replace(/^```\n?/gm, "").trim();
     })();
 
-    log(`✅ AI selesai generate kode!`);
-    log(`   📝 Panjang kode: ${code.split("\n").length} baris`);
-    log("   💾 Menyimpan ke registry...");
+    log(` AI selesai generate kode!`);
+    log(`    Panjang kode: ${code.split("\n").length} baris`);
+    log("    Menyimpan ke registry...");
 
     const id        = uuidv4();
     const trySchema = buildTrySchema(url, target);
@@ -1176,8 +1176,8 @@ PENTING: Tulis SEMUA kode dari awal sampai akhir. JANGAN potong atau skip bagian
     };
     registry.add(entry);
 
-    log(`✅ Scraper tersimpan dengan ID: ${id}`);
-    log("🎉 Generate selesai! Siap digunakan.");
+    log(` Scraper tersimpan dengan ID: ${id}`);
+    log(" Generate selesai! Siap digunakan.");
     done({ success: true, id, code, trySchema, entry });
 
   } catch (e) {
@@ -1890,13 +1890,6 @@ if (IS_PROD) {
 }
 
 // ── Start ─────────────────────────────────────────────────────
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`\n  SmartScrapeAI Server v3.0`);
-  console.log(`  → http://localhost:${PORT}`);
-  console.log(`  → API Docs: http://localhost:${PORT}/api/docs`);
-  console.log(`  → Health:   http://localhost:${PORT}/health`);
-  console.log(`  → Scrapers: ${registry.count()} loaded dari disk\n`);
-});
 
 // ══════════════════════════════════════════════════════════════
 //  v4: API ROUTES MANAGEMENT
@@ -2019,7 +2012,7 @@ function registerGeneratedRoute(route, scraperEntry) {
   if (route.method === "GET")  app.get(cleanPath,  handler);
   if (route.method === "POST") app.post(cleanPath, handler);
 
-  console.log(`[v4] ✓ Registered: ${route.method} ${cleanPath}`);
+  console.log(`[v4]  Registered: ${route.method} ${cleanPath}`);
 }
 
 // ── Re-register semua saved routes saat startup ───────────────
@@ -2107,7 +2100,7 @@ app.post("/api/scraper/:id/install", async (req, res) => {
 
     res.json({
       success:  true,
-      message:  `✓ ${packagesInfo} berhasil diinstall untuk ${entry.lang}!`,
+      message:  ` ${packagesInfo} berhasil diinstall untuk ${entry.lang}!`,
       output:   output || "Install selesai.",
       packages: packagesInfo,
       lang:     entry.lang,
@@ -2198,4 +2191,152 @@ app.get("/api/docs/v4", (req, res) => {
       usage:     "Kirim provider + apiKey di setiap request POST yang butuh AI",
     },
   });
+});
+
+});
+
+
+// ══════════════════════════════════════════════════════════════
+//  C3 STORAGE — Cloudflare R2 Sync
+// ══════════════════════════════════════════════════════════════
+const c3 = require("./api/c3storage");
+
+// GET /api/c3/status — Cek konfigurasi C3
+app.get("/api/c3/status", (req, res) => {
+  const cfg = c3.config();
+  res.json({
+    success:    true,
+    configured: cfg.configured,
+    config:     cfg,
+    hint:       cfg.configured
+      ? "C3 Storage aktif. Gunakan /api/c3/push untuk sync."
+      : "Set C3_ENDPOINT, C3_BUCKET, C3_ACCESS_KEY, C3_SECRET_KEY di .env untuk mengaktifkan.",
+  });
+});
+
+// POST /api/c3/push — Upload scrapers.json ke R2
+app.post("/api/c3/push", async (req, res) => {
+  try {
+    const scrapers = registry.getAll();
+    const filename = req.body?.filename || "scrapers.json";
+    const result   = await c3.uploadToC3(scrapers, filename);
+    console.log(`[c3] Push ${scrapers.length} scrapers -> ${result.filename} (${result.bytes} bytes)`);
+    res.json({
+      success:  true,
+      message:  `${scrapers.length} scraper berhasil di-push ke C3 Storage`,
+      ...result,
+    });
+  } catch (e) {
+    console.error("[c3/push]", e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// POST /api/c3/pull — Download & merge scrapers dari R2
+app.post("/api/c3/pull", async (req, res) => {
+  try {
+    const filename = req.body?.filename || "scrapers.json";
+    const remote   = await c3.downloadFromC3(filename);
+    if (!Array.isArray(remote)) throw new Error("Format file C3 tidak valid (bukan array)");
+
+    let added = 0, updated = 0;
+    for (const s of remote) {
+      if (!s.id) continue;
+      const existing = registry.getById(s.id);
+      if (!existing) { registry.add(s); added++; }
+      else if (new Date(s.updatedAt) > new Date(existing.updatedAt)) { registry.update(s.id, s); updated++; }
+    }
+
+    res.json({
+      success: true,
+      message: `Pull selesai: ${added} ditambahkan, ${updated} diperbarui`,
+      total:   remote.length,
+      added,
+      updated,
+      skipped: remote.length - added - updated,
+    });
+  } catch (e) {
+    console.error("[c3/pull]", e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// POST /api/c3/sync — 2-way sync (pull dulu, lalu push)
+app.post("/api/c3/sync", async (req, res) => {
+  try {
+    // 1. Pull dari remote
+    const filename = req.body?.filename || "scrapers.json";
+    let pullResult = { added: 0, updated: 0, total: 0 };
+    try {
+      const remote = await c3.downloadFromC3(filename);
+      if (Array.isArray(remote)) {
+        for (const s of remote) {
+          if (!s.id) continue;
+          const ex = registry.getById(s.id);
+          if (!ex) { registry.add(s); pullResult.added++; }
+          else if (new Date(s.updatedAt) > new Date(ex.updatedAt)) { registry.update(s.id, s); pullResult.updated++; }
+        }
+        pullResult.total = remote.length;
+      }
+    } catch (pullErr) {
+      // File belum ada di remote - lanjut ke push
+      console.log("[c3/sync] Remote belum ada, langsung push:", pullErr.message);
+    }
+
+    // 2. Push lokal ke remote
+    const allScrapers = registry.getAll();
+    const pushResult  = await c3.uploadToC3(allScrapers, filename);
+
+    res.json({
+      success:  true,
+      message:  `Sync selesai: pull ${pullResult.added} baru + ${pullResult.updated} update, push ${allScrapers.length} scrapers`,
+      pull:     pullResult,
+      push:     { count: allScrapers.length, bytes: pushResult.bytes },
+      syncedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error("[c3/sync]", e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /api/c3/files — List file di bucket
+app.get("/api/c3/files", async (req, res) => {
+  try {
+    const files = await c3.listC3Files(req.query.prefix || "");
+    res.json({ success: true, count: files.length, files });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// DELETE /api/c3/file/:name — Hapus file dari bucket
+app.delete("/api/c3/file/:name", async (req, res) => {
+  try {
+    const result = await c3.deleteFromC3(req.params.name);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── Fallback (Production React build) ────────────────────────
+if (IS_PROD) {
+  app.get("*", (req, res) => {
+    const idx = path.join(__dirname, "client", "dist", "index.html");
+    if (fs.existsSync(idx)) {
+      res.sendFile(idx);
+    } else {
+      res.status(404).json({ error: "Frontend build tidak ditemukan. Jalankan: npm run build" });
+    }
+  });
+}
+
+// ── Start ─────────────────────────────────────────────────────
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`\n  SmartScrapeAI Server v4.0`);
+  console.log(`  -> http://localhost:${PORT}`);
+  console.log(`  -> API: http://localhost:${PORT}/api/docs`);
+  console.log(`  -> Health: http://localhost:${PORT}/health`);
+  console.log(`  -> Scrapers loaded: ${registry.count()}\n`);
 });

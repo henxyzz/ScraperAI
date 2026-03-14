@@ -236,7 +236,7 @@ export function DocsView() {
             {Array.from(new Set(allRoutes.map(r => r.category))).map(cat => (
               <div key={cat}>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--neon3)", textTransform: "uppercase", letterSpacing: 2, padding: "5px 0 3px", borderBottom: "1px solid var(--border)", marginBottom: 5 }}>
-                  📂 {cat}
+                   {cat}
                 </div>
                 {allRoutes.filter(r => r.category === cat).map(route => (
                   <div key={route.id} className="generated-route-card" style={{ marginBottom: 6 }}>

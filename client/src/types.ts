@@ -5,7 +5,7 @@
 export type Lang      = "nodejs" | "python" | "php";
 export type Provider  = "anthropic" | "openai" | "groq" | "gemini" | "deepseek" | "mistral" | "xai" | "together";
 export type FixMode   = "auto" | "rewrite" | "patch" | "enhance";
-export type View      = "generator" | "scrapers" | "fix" | "docs";
+export type View = "generator" | "scrapers" | "fix" | "docs" | "storage";
 
 export interface ProviderConfig {
   provider: Provider;
@@ -224,3 +224,22 @@ export interface TryOutputResult {
 }
 
 export type ModuleType = "commonjs" | "esm" | "esm-ts";
+
+// ── C3 Storage ────────────────────────────────────────────────
+export interface C3Config {
+  configured:  boolean;
+  endpoint:    string | null;
+  bucket:      string;
+  fileKey:     string;
+  publicUrl:   string | null;
+  hasKeys:     boolean;
+}
+
+export interface C3SyncResult {
+  success:  boolean;
+  message:  string;
+  pull?:    { added: number; updated: number; total: number };
+  push?:    { count: number; bytes: number };
+  syncedAt?: string;
+  error?:   string;
+}

@@ -10,6 +10,11 @@ services:
       - NODE_ENV=production
       - PORT=8080
       - TZ=Asia/Jakarta
+      # C3 Storage (opsional)
+      # - C3_ENDPOINT=https://<account>.r2.cloudflarestorage.com
+      # - C3_BUCKET=smartscrapeai
+      # - C3_ACCESS_KEY=
+      # - C3_SECRET_KEY=
     volumes:
       - ./data:/app/data
     restart: unless-stopped
