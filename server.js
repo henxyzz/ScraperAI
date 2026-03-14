@@ -64,117 +64,204 @@ if (IS_PROD) {
   }
 }
 
-// ── Token Caps ────────────────────────────────────────────────
+// ── Default Models (latest per provider) ─────────────────────
+const PROVIDER_DEFAULTS = {
+  anthropic: "claude-sonnet-4-20250514",
+  openai:    "gpt-4o",
+  groq:      "llama-3.3-70b-versatile",
+  gemini:    "gemini-2.0-flash",
+  deepseek:  "deepseek-chat",
+  mistral:   "mistral-large-latest",
+  xai:       "grok-3",
+  together:  "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+};
+
+// ── Token Caps (max output tokens per provider/model) ─────────
 const PROVIDER_MAX_TOKENS = {
-  anthropic: 16000,
-  openai:    16384,
-  groq:       8000,
-  gemini:    16000,
-  deepseek:  16000,
-  mistral:   16000,
-  xai:        8192,
-  together:   8192,
+  anthropic: 16000,   // claude-sonnet/opus: up to 64k but 16k safe
+  openai:    16384,   // gpt-4o: 16k output
+  groq:      32000,   // llama-3.3-70b-versatile: 32768 max
+  gemini:    16000,   // gemini-2.0-flash: 8192 default, up to 16k
+  deepseek:  16000,   // deepseek-chat v3: up to 16k
+  mistral:   16000,   // mistral-large-latest: 16k
+  xai:       16000,   // grok-3: 16k output
+  together:  16000,   // llama-3.3-70b: 16k
 };
 
 // ── Helper: Call AI Provider ──────────────────────────────────
 async function callAI({ provider, apiKey, model, system, prompt, maxTokens = null }) {
-  const headers = { "Content-Type": "application/json" };
+  const JSON_HDR = { "Content-Type": "application/json" };
 
   const resolveTokens = (provId, requested) =>
     requested !== null ? requested : (PROVIDER_MAX_TOKENS[provId] || 8192);
 
-  // Anthropic
+  const resolveModel = (provId, requested) =>
+    (requested && requested.trim()) ? requested.trim() : PROVIDER_DEFAULTS[provId];
+
+  // ── Anthropic Claude ──────────────────────────────────────
   if (provider === "anthropic") {
     const tokens = resolveTokens("anthropic", maxTokens);
+    const mdl    = resolveModel("anthropic", model);
+    const body   = {
+      model:      mdl,
+      max_tokens: tokens,
+      messages:   [{ role: "user", content: prompt }],
+    };
+    // system hanya dikirim jika ada isinya
+    if (system && system.trim()) body.system = system.trim();
+
     const res = await axios.post(
-      "https://api.anthropic.com/v1/messages",
+      "https://api.anthropic.com/v1/messages", body,
       {
-        model: model || "claude-sonnet-4-20250514",
-        max_tokens: tokens,
-        system,
-        messages: [{ role: "user", content: prompt }],
-      },
-      {
-        headers: { ...headers, "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-        timeout: 120000,
+        headers: { ...JSON_HDR, "x-api-key": apiKey.trim(), "anthropic-version": "2023-06-01" },
+        timeout: 150000,
       }
     );
     return res.data.content?.[0]?.text || "";
   }
 
-  // OpenAI / DeepSeek / Together
-  if (["openai", "deepseek", "together"].includes(provider)) {
-    const baseURLs    = { openai: "https://api.openai.com/v1", deepseek: "https://api.deepseek.com/v1", together: "https://api.together.xyz/v1" };
-    const defaultMdls = { openai: "gpt-4o", deepseek: "deepseek-chat", together: "meta-llama/Llama-3-70b-chat-hf" };
-    const tokens = resolveTokens(provider, maxTokens);
+  // ── OpenAI ────────────────────────────────────────────────
+  if (provider === "openai") {
+    const tokens = resolveTokens("openai", maxTokens);
+    const mdl    = resolveModel("openai", model);
+    const msgs   = [];
+    if (system && system.trim()) msgs.push({ role: "system", content: system.trim() });
+    msgs.push({ role: "user", content: prompt });
+
+    // o1/o3 series tidak support max_tokens — pakai max_completion_tokens
+    const isReasoning = /^o[13]/.test(mdl);
+    const body = {
+      model: mdl,
+      messages: msgs,
+      [isReasoning ? "max_completion_tokens" : "max_tokens"]: tokens,
+    };
+
     const res = await axios.post(
-      `${baseURLs[provider]}/chat/completions`,
-      {
-        model: model || defaultMdls[provider],
-        max_tokens: tokens,
-        messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
-      },
-      { headers: { ...headers, Authorization: `Bearer ${apiKey}` }, timeout: 120000 }
+      "https://api.openai.com/v1/chat/completions", body,
+      { headers: { ...JSON_HDR, Authorization: `Bearer ${apiKey.trim()}` }, timeout: 150000 }
     );
     return res.data.choices?.[0]?.message?.content || "";
   }
 
-  // Groq
+  // ── Groq ──────────────────────────────────────────────────
   if (provider === "groq") {
-    const tokens = maxTokens !== null ? Math.min(maxTokens, 8000) : 8000;
+    const mdl    = resolveModel("groq", model);
+    // Token limit per model Groq
+    const MODEL_CAPS = {
+      "llama-3.3-70b-versatile":        32768,
+      "llama-3.1-70b-versatile":        32768,
+      "llama-3.1-8b-instant":           8192,
+      "llama3-70b-8192":                8192,
+      "llama3-8b-8192":                 8192,
+      "mixtral-8x7b-32768":             32768,
+      "gemma2-9b-it":                   8192,
+      "gemma-7b-it":                    8192,
+      "deepseek-r1-distill-llama-70b":  32768,
+      "qwen-qwq-32b":                   32768,
+    };
+    const cap    = MODEL_CAPS[mdl] || 8192;
+    const tokens = maxTokens !== null ? Math.min(maxTokens, cap) : cap;
+    const msgs   = [];
+    if (system && system.trim()) msgs.push({ role: "system", content: system.trim() });
+    msgs.push({ role: "user", content: prompt });
+
     const res = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: model || "llama3-70b-8192",
-        max_tokens: tokens,
-        messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
-      },
-      { headers: { ...headers, Authorization: `Bearer ${apiKey}` }, timeout: 120000 }
+      { model: mdl, max_tokens: tokens, messages: msgs },
+      { headers: { ...JSON_HDR, Authorization: `Bearer ${apiKey.trim()}` }, timeout: 150000 }
     );
     return res.data.choices?.[0]?.message?.content || "";
   }
 
-  // Google Gemini
+  // ── Google Gemini ─────────────────────────────────────────
   if (provider === "gemini") {
-    const mdl    = model || "gemini-1.5-flash";
+    const mdl    = resolveModel("gemini", model);
     const tokens = resolveTokens("gemini", maxTokens);
+
+    // Gemini 2.x: gunakan systemInstruction field (bukan concat string)
+    const body = {
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: tokens, temperature: 0.2 },
+    };
+    if (system && system.trim()) {
+      body.systemInstruction = { parts: [{ text: system.trim() }] };
+    }
+
     const res = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${apiKey}`,
-      {
-        contents: [{ parts: [{ text: `${system}\n\n${prompt}` }] }],
-        generationConfig: { maxOutputTokens: tokens, temperature: 0.2 },
-      },
-      { headers, timeout: 120000 }
+      `https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${apiKey.trim()}`,
+      body,
+      { headers: JSON_HDR, timeout: 150000 }
     );
-    return res.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    // Handle blocked responses
+    const candidate = res.data.candidates?.[0];
+    if (!candidate) {
+      const reason = res.data.promptFeedback?.blockReason || "unknown";
+      throw new Error(`Gemini: response diblok (${reason})`);
+    }
+    return candidate.content?.parts?.[0]?.text || "";
   }
 
-  // Mistral
+  // ── Mistral ───────────────────────────────────────────────
   if (provider === "mistral") {
     const tokens = resolveTokens("mistral", maxTokens);
+    const mdl    = resolveModel("mistral", model);
+    const msgs   = [];
+    if (system && system.trim()) msgs.push({ role: "system", content: system.trim() });
+    msgs.push({ role: "user", content: prompt });
+
     const res = await axios.post(
       "https://api.mistral.ai/v1/chat/completions",
-      {
-        model: model || "mistral-large-latest",
-        max_tokens: tokens,
-        messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
-      },
-      { headers: { ...headers, Authorization: `Bearer ${apiKey}` }, timeout: 120000 }
+      { model: mdl, max_tokens: tokens, messages: msgs },
+      { headers: { ...JSON_HDR, Authorization: `Bearer ${apiKey.trim()}` }, timeout: 150000 }
     );
     return res.data.choices?.[0]?.message?.content || "";
   }
 
-  // xAI Grok
+  // ── xAI Grok ─────────────────────────────────────────────
   if (provider === "xai") {
     const tokens = resolveTokens("xai", maxTokens);
+    const mdl    = resolveModel("xai", model);
+    const msgs   = [];
+    if (system && system.trim()) msgs.push({ role: "system", content: system.trim() });
+    msgs.push({ role: "user", content: prompt });
+
     const res = await axios.post(
       "https://api.x.ai/v1/chat/completions",
-      {
-        model: model || "grok-beta",
-        max_tokens: tokens,
-        messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
-      },
-      { headers: { ...headers, Authorization: `Bearer ${apiKey}` }, timeout: 120000 }
+      { model: mdl, max_tokens: tokens, messages: msgs },
+      { headers: { ...JSON_HDR, Authorization: `Bearer ${apiKey.trim()}` }, timeout: 150000 }
+    );
+    return res.data.choices?.[0]?.message?.content || "";
+  }
+
+  // ── DeepSeek ──────────────────────────────────────────────
+  if (provider === "deepseek") {
+    const tokens = resolveTokens("deepseek", maxTokens);
+    const mdl    = resolveModel("deepseek", model);
+    const msgs   = [];
+    if (system && system.trim()) msgs.push({ role: "system", content: system.trim() });
+    msgs.push({ role: "user", content: prompt });
+
+    const res = await axios.post(
+      "https://api.deepseek.com/chat/completions",
+      { model: mdl, max_tokens: tokens, messages: msgs },
+      { headers: { ...JSON_HDR, Authorization: `Bearer ${apiKey.trim()}` }, timeout: 150000 }
+    );
+    return res.data.choices?.[0]?.message?.content || "";
+  }
+
+  // ── Together AI ───────────────────────────────────────────
+  if (provider === "together") {
+    const tokens = resolveTokens("together", maxTokens);
+    const mdl    = resolveModel("together", model);
+    const msgs   = [];
+    if (system && system.trim()) msgs.push({ role: "system", content: system.trim() });
+    msgs.push({ role: "user", content: prompt });
+
+    const res = await axios.post(
+      "https://api.together.xyz/v1/chat/completions",
+      { model: mdl, max_tokens: tokens, messages: msgs },
+      { headers: { ...JSON_HDR, Authorization: `Bearer ${apiKey.trim()}` }, timeout: 150000 }
     );
     return res.data.choices?.[0]?.message?.content || "";
   }
@@ -457,44 +544,75 @@ app.post("/api/validate", async (req, res) => {
   const { provider, apiKey, model } = req.body;
   if (!provider || !apiKey) return res.status(400).json({ error: "provider dan apiKey diperlukan" });
 
-  const testPrompts = {
-    anthropic: () => axios.post("https://api.anthropic.com/v1/messages",
-      { model: model || "claude-haiku-4-5-20251001", max_tokens: 10, messages: [{ role: "user", content: "Hi" }] },
-      { headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" }, timeout: 10000 }),
-    openai: () => axios.post("https://api.openai.com/v1/chat/completions",
-      { model: model || "gpt-4o-mini", max_tokens: 10, messages: [{ role: "user", content: "Hi" }] },
-      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 10000 }),
-    groq: () => axios.post("https://api.groq.com/openai/v1/chat/completions",
-      { model: model || "llama3-70b-8192", max_tokens: 10, messages: [{ role: "user", content: "Hi" }] },
-      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 10000 }),
-    gemini: () => axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-      { contents: [{ parts: [{ text: "Hi" }] }], generationConfig: { maxOutputTokens: 10 } },
-      { headers: { "Content-Type": "application/json" }, timeout: 10000 }),
-    deepseek: () => axios.post("https://api.deepseek.com/v1/chat/completions",
-      { model: "deepseek-chat", max_tokens: 10, messages: [{ role: "user", content: "Hi" }] },
-      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 10000 }),
-    mistral: () => axios.post("https://api.mistral.ai/v1/chat/completions",
-      { model: "mistral-small-latest", max_tokens: 10, messages: [{ role: "user", content: "Hi" }] },
-      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 10000 }),
-    xai: () => axios.post("https://api.x.ai/v1/chat/completions",
-      { model: "grok-beta", max_tokens: 10, messages: [{ role: "user", content: "Hi" }] },
-      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 10000 }),
+  const VALIDATE_BODY = {
+    // Pakai model paling murah/cepat tiap provider untuk validate
+    anthropic: { model: model || "claude-haiku-4-5-20251001", max_tokens: 5,  messages: [{ role: "user", content: "Hi" }] },
+    openai:    { model: model || "gpt-4o-mini",               max_tokens: 5,  messages: [{ role: "user", content: "Hi" }] },
+    groq:      { model: model || "llama-3.1-8b-instant",      max_tokens: 5,  messages: [{ role: "user", content: "Hi" }] },
+    gemini:    null,  // handle terpisah (beda format)
+    deepseek:  { model: model || "deepseek-chat",             max_tokens: 5,  messages: [{ role: "user", content: "Hi" }] },
+    mistral:   { model: model || "mistral-small-latest",      max_tokens: 5,  messages: [{ role: "user", content: "Hi" }] },
+    xai:       { model: model || "grok-3-mini",               max_tokens: 5,  messages: [{ role: "user", content: "Hi" }] },
+    together:  { model: model || "meta-llama/Llama-3.3-70B-Instruct-Turbo", max_tokens: 5, messages: [{ role: "user", content: "Hi" }] },
   };
 
-  const testFn = testPrompts[provider];
-  if (!testFn) return res.status(400).json({ error: `Provider tidak dikenal: ${provider}` });
+  const VALIDATE_URLS = {
+    anthropic: "https://api.anthropic.com/v1/messages",
+    openai:    "https://api.openai.com/v1/chat/completions",
+    groq:      "https://api.groq.com/openai/v1/chat/completions",
+    deepseek:  "https://api.deepseek.com/chat/completions",
+    mistral:   "https://api.mistral.ai/v1/chat/completions",
+    xai:       "https://api.x.ai/v1/chat/completions",
+    together:  "https://api.together.xyz/v1/chat/completions",
+  };
+
+  const VALIDATE_HEADERS = (prov) => {
+    const base = { "Content-Type": "application/json" };
+    if (prov === "anthropic") return { ...base, "x-api-key": apiKey.trim(), "anthropic-version": "2023-06-01" };
+    return { ...base, Authorization: `Bearer ${apiKey.trim()}` };
+  };
+
+  const testFn = async () => {
+    // Gemini beda endpoint & format
+    if (provider === "gemini") {
+      const mdl = model || "gemini-2.0-flash";
+      return axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${mdl}:generateContent?key=${apiKey.trim()}`,
+        { contents: [{ role: "user", parts: [{ text: "Hi" }] }], generationConfig: { maxOutputTokens: 5 } },
+        { headers: { "Content-Type": "application/json" }, timeout: 12000 }
+      );
+    }
+
+    const url  = VALIDATE_URLS[provider];
+    const body = VALIDATE_BODY[provider];
+    if (!url || !body) throw new Error(`Provider tidak dikenal: ${provider}`);
+
+    return axios.post(url, body, { headers: VALIDATE_HEADERS(provider), timeout: 12000 });
+  };
+
+  if (!VALIDATE_URLS[provider] && provider !== "gemini") {
+    return res.status(400).json({ error: `Provider tidak dikenal: ${provider}` });
+  }
 
   try {
     await testFn();
-    res.json({ success: true, valid: true, provider, message: "API Key valid dan aktif" });
+    res.json({ success: true, valid: true, provider, message: `API Key ${provider} valid dan aktif` });
   } catch (e) {
     const status = e.response?.status;
-    const msg    = e.response?.data?.error?.message || e.message;
+    // Error detail dari berbagai provider berbeda format
+    const msg =
+      e.response?.data?.error?.message ||        // OpenAI, Groq, xAI, Mistral, Together
+      e.response?.data?.message ||               // Anthropic
+      e.response?.data?.error?.status ||         // Gemini
+      e.message || "Unknown error";
     if (status === 401 || status === 403) {
       return res.json({ success: true, valid: false, provider, message: `API Key tidak valid: ${msg}` });
     }
-    // Status lain (500 dari provider, timeout) — key mungkin valid
-    res.json({ success: true, valid: null, provider, message: `Tidak bisa verifikasi (${status || "timeout"}): ${msg}` });
+    // 404 = model tidak ditemukan, tapi key mungkin valid
+    if (status === 404) {
+      return res.json({ success: true, valid: null, provider, message: `Model tidak ditemukan, coba ganti model. Key mungkin valid.` });
+    }
+    res.json({ success: true, valid: null, provider, message: `Tidak bisa verifikasi (HTTP ${status || "timeout"}): ${msg}` });
   }
 });
 
