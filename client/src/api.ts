@@ -1,19 +1,19 @@
 // ════════════════════════════════════════
-//  SmartScrapeAI v3 — API Client
+//  SmartScrapeAI v4 — API Client
 // ════════════════════════════════════════
 
 import axios from "axios";
 import type {
   AnalyzeResult, GenerateResult, Scraper, FixResult,
   Template, ScraperStats, ValidateResult, ApiDocs,
-  Lang, Provider, FixMode,
+  Lang, Provider, FixMode, ApiRoute,
 } from "./types";
 
 const BASE = "";  // Vite proxy handles /api → backend in dev, same origin in prod
 
 const api = axios.create({
   baseURL: BASE,
-  timeout: 150000, // 2.5 menit untuk generate
+  timeout: 150000,
 });
 
 // ── Interceptors ──────────────────────────────────────────────
@@ -61,6 +61,10 @@ export const searchScrapers = (q?: string, lang?: string, provider?: string) =>
 export const getStats = () =>
   api.get<{ success: boolean; stats: ScraperStats }>("/api/scrapers/stats").then(r => r.data);
 
+// ── Try Output ────────────────────────────────────────────────
+export const tryScraper = (id: string, params: Record<string, string>) =>
+  api.post<{ success: boolean; preview: any }>(`/api/scraper/${id}/try`, params).then(r => r.data);
+
 // ── Fix Engine ────────────────────────────────────────────────
 export const fixScraper = (
   id: string,
@@ -87,6 +91,23 @@ export const getHistory = (id: string) =>
 // ── API Docs ──────────────────────────────────────────────────
 export const getApiDocs = () =>
   api.get<ApiDocs>("/api/docs").then(r => r.data);
+
+// ── v4: API Routes ────────────────────────────────────────────
+export const createApiRoute = (scraperId: string, route: Omit<ApiRoute, "id" | "scraperId" | "createdAt">) =>
+  api.post<{ success: boolean; route: ApiRoute; message: string }>(`/api/scraper/${scraperId}/routes`, route).then(r => r.data);
+
+export const getApiRoutes = (scraperId: string) =>
+  api.get<{ success: boolean; routes: ApiRoute[] }>(`/api/scraper/${scraperId}/routes`).then(r => r.data);
+
+export const deleteApiRoute = (scraperId: string, routeId: string) =>
+  api.delete<{ success: boolean; message: string }>(`/api/scraper/${scraperId}/routes/${routeId}`).then(r => r.data);
+
+export const getAllApiRoutes = () =>
+  api.get<{ success: boolean; routes: ApiRoute[]; total: number }>("/api/routes").then(r => r.data);
+
+// ── Auto Install ──────────────────────────────────────────────
+export const installDeps = (scraperId: string, packages?: string[]) =>
+  api.post<{ success: boolean; message: string; output: string }>(`/api/scraper/${scraperId}/install`, { packages }).then(r => r.data);
 
 // ── Download helpers (window.location) ───────────────────────
 export const downloadFile = (id: string) => {

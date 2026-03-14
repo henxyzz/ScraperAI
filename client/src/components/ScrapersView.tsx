@@ -77,7 +77,7 @@ export function ScrapersView() {
     new Date(d).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 
   return (
-    <div style={{ display: "flex", gap: 16 }}>
+    <div className="scrapers-layout" style={{ display: "flex", gap: 16 }}>
       {/* Left: list */}
       <div style={{ flex: 1, minWidth: 0 }}>
         {/* Stats Row */}
@@ -221,7 +221,7 @@ export function ScrapersView() {
 
       {/* Right: detail pane */}
       {selected && (
-        <div style={{ width: 480, flexShrink: 0 }}>
+        <div className="scraper-detail-pane" style={{ width: 480, flexShrink: 0 }}>
           <div className="card" style={{ position: "sticky", top: 80 }}>
             <div className="card-head">
               <Code2 size={14} style={{ color: "var(--neon)" }} />

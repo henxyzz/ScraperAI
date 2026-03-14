@@ -1,22 +1,23 @@
 // ═══════════════════════════════════════════════════════════════
-//  SmartScrapeAI Server v3.0
-//  Bug fixes: registry.getById, rate limiter, ZIP download
-//  New: /api/validate, /api/templates, /api/scraper/:id/zip,
-//       /api/export/zip, /api/scrapers/stats, /api/scrapers/search
+//  SmartScrapeAI Server v4.0
+//  v4: AI module recommendations, auto-install, generated API routes,
+//      Try Output → API Route, auto-fix error handler, responsive UI
 // ═══════════════════════════════════════════════════════════════
 
 require("dotenv").config();
-const express    = require("express");
-const cors       = require("cors");
-const helmet     = require("helmet");
-const morgan     = require("morgan");
-const path       = require("path");
-const fs         = require("fs");
-const { v4: uuidv4 } = require("uuid");
-const axios      = require("axios");
-const rateLimit  = require("express-rate-limit");
-const JSZip      = require("jszip");
-const registry   = require("./api/registry");
+const express           = require("express");
+const cors              = require("cors");
+const helmet            = require("helmet");
+const morgan            = require("morgan");
+const path              = require("path");
+const fs                = require("fs");
+const os                = require("os");
+const { v4: uuidv4 }    = require("uuid");
+const { exec }          = require("child_process");
+const axios             = require("axios");
+const rateLimit         = require("express-rate-limit");
+const JSZip             = require("jszip");
+const registry          = require("./api/registry");
 
 const app     = express();
 const PORT    = process.env.PORT || 8080;
@@ -628,26 +629,69 @@ app.post("/api/analyze", async (req, res) => {
       callAI({
         provider, apiKey, model,
         system: `Kamu adalah SmartScrapeAI Agent berbahasa Indonesia.
-Analisa URL dan sarankan target scraping yang spesifik dan berguna.
-Balas HANYA JSON valid (tanpa markdown):
+Analisa URL dan sarankan target scraping yang spesifik, berguna, serta rekomendasikan library terbaik.
+Balas HANYA JSON valid (tanpa markdown, tanpa backtick):
 {
   "greeting": "2 kalimat tentang website ini dan jenis konten utamanya",
   "question": "tanya apa yang mau di-scrape dengan spesifik (1 kalimat)",
-  "suggestions": ["saran1 spesifik","saran2","saran3","saran4","saran5","saran6"]
-}`,
+  "suggestions": ["saran1 spesifik","saran2","saran3","saran4","saran5","saran6"],
+  "recommended_modules": {
+    "nodejs": {
+      "packages": ["axios","cheerio"],
+      "reason": "alasan singkat kenapa paket ini cocok untuk site ini",
+      "install_cmd": "npm install axios cheerio"
+    },
+    "python": {
+      "packages": ["requests","beautifulsoup4","lxml"],
+      "reason": "alasan singkat",
+      "install_cmd": "pip install requests beautifulsoup4 lxml"
+    },
+    "php": {
+      "packages": ["guzzlehttp/guzzle"],
+      "reason": "alasan singkat",
+      "install_cmd": "composer require guzzlehttp/guzzle"
+    }
+  },
+  "site_type": "ecommerce|news|social|blog|api|other",
+  "complexity": "simple|moderate|complex",
+  "complexity_reason": "1 kalimat kenapa kompleksitas ini"
+}
+
+Perhatikan: jika site menggunakan JavaScript rendering berat (SPA, React, Vue, infinite scroll), rekomendasikan puppeteer-extra + stealth untuk nodejs dan selenium/playwright untuk python.
+Jika site simple HTML statis, axios+cheerio dan requests+bs4 sudah cukup.`,
         prompt: `Analisa website ini untuk scraping: ${url}`,
-        maxTokens: 600,
+        maxTokens: 900,
       }),
     ]);
 
-    const clean = raw.replace(/```json|```/g, "").trim();
+    const clean = raw.replace(/```json[\s\S]*?```|```[\s\S]*?```/g, m => m.replace(/```json\n?|```\n?/g,"")).replace(/```/g,"").trim();
     let parsed;
-    try   { parsed = JSON.parse(clean); }
-    catch { parsed = {
-      greeting:    `Website ${url} siap untuk di-scrape menggunakan SmartScrapeAI v3.`,
-      question:    "Data apa yang ingin kamu ambil dari website ini?",
-      suggestions: ["Nama, harga, dan deskripsi produk","Judul dan konten artikel","Data tabel dan harga","Semua link dan URL halaman","Gambar dan media","Informasi kontak"],
-    }; }
+    try { parsed = JSON.parse(clean); }
+    catch {
+      // Fallback: deteksi site type dari URL untuk default modules
+      const host = (() => { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } })();
+      const needsBypass = fw.bypass_recommended;
+      const isSocial = ["instagram","tiktok","twitter","x.com","facebook","linkedin"].some(s => host.includes(s));
+      const isEcomm  = ["shopee","tokopedia","lazada","amazon","ebay","alibaba"].some(s => host.includes(s));
+
+      parsed = {
+        greeting:    `Website ${url} siap untuk di-scrape menggunakan SmartScrapeAI v4.`,
+        question:    "Data apa yang ingin kamu ambil dari website ini?",
+        suggestions: ["Nama, harga, dan deskripsi produk","Judul dan konten artikel","Data tabel dan harga","Semua link dan URL halaman","Gambar dan media","Informasi kontak"],
+        site_type:   isSocial ? "social" : isEcomm ? "ecommerce" : "other",
+        complexity:  needsBypass ? "complex" : "moderate",
+        complexity_reason: needsBypass ? "Site menggunakan proteksi bot/Cloudflare" : "Site dengan struktur HTML standar",
+        recommended_modules: {
+          nodejs: needsBypass || isSocial
+            ? { packages: ["puppeteer-extra","puppeteer-extra-plugin-stealth","user-agents"], reason: "Site memerlukan browser automation untuk bypass proteksi", install_cmd: "npm install puppeteer-extra puppeteer-extra-plugin-stealth user-agents" }
+            : { packages: ["axios","cheerio"], reason: "Site HTML statis, axios+cheerio ringan dan cepat", install_cmd: "npm install axios cheerio" },
+          python: needsBypass || isSocial
+            ? { packages: ["cloudscraper","beautifulsoup4","fake-useragent","lxml"], reason: "cloudscraper untuk bypass CF, bs4 untuk parsing", install_cmd: "pip install cloudscraper beautifulsoup4 fake-useragent lxml" }
+            : { packages: ["requests","beautifulsoup4","lxml"], reason: "requests+bs4 cukup untuk HTML statis", install_cmd: "pip install requests beautifulsoup4 lxml" },
+          php: { packages: ["guzzlehttp/guzzle"], reason: "Guzzle HTTP client terbaik untuk PHP scraping", install_cmd: "composer require guzzlehttp/guzzle" },
+        },
+      };
+    }
 
     res.json({ success: true, url, firewall: fw, ai: parsed });
   } catch (e) {
@@ -722,12 +766,14 @@ INGAT: Tulis SEMUA kode dari awal sampai akhir. JANGAN potong atau skip bagian a
 // ── GET /api/docs ─────────────────────────────────────────────
 app.get("/api/docs", (req, res) => {
   const all  = registry.getAll();
+  const allApiRoutes = all.flatMap(s => (s.apiRoutes || []).map(r => ({ ...r, scraperName: s.name })));
   const docs = {
     name:           "SmartScrapeAI — API Documentation",
-    version:        "3.0.0",
+    version:        "4.0.0",
     description:    "Auto-generated API docs dari semua scraper yang sudah dibuat",
     baseURL:        `${req.protocol}://${req.get("host")}`,
-    totalEndpoints: all.length + 16,
+    totalEndpoints: all.length + 18 + allApiRoutes.length,
+    generatedRouteCount: allApiRoutes.length,
     builtinEndpoints: [
       { method: "GET",    path: "/health",                   description: "Health check server + stats" },
       { method: "POST",   path: "/api/validate",             description: "Validasi API key provider", body: { provider: "string", apiKey: "string", model: "string (opsional)" } },
@@ -750,6 +796,11 @@ app.get("/api/docs", (req, res) => {
       { method: "POST",   path: "/api/scraper/:id/revert",   description: "Revert ke versi sebelumnya" },
       { method: "POST",   path: "/api/scraper/:id/edit",     description: "Edit kode via instruksi AI" },
       { method: "DELETE", path: "/api/scraper/:id",          description: "Hapus scraper" },
+      { method: "GET",    path: "/api/routes",               description: "Semua generated API routes" },
+      { method: "GET",    path: "/api/scraper/:id/routes",   description: "API routes untuk scraper tertentu" },
+      { method: "POST",   path: "/api/scraper/:id/routes",   description: "Buat API route baru dari scraper", body: { name: "string", category: "string", path: "string", method: "GET|POST" } },
+      { method: "DELETE", path: "/api/scraper/:id/routes/:routeId", description: "Hapus API route" },
+      { method: "POST",   path: "/api/scraper/:id/install",  description: "Auto install dependencies scraper" },
     ],
     scrapers: all.map(s => ({
       id:          s.id,
@@ -768,6 +819,7 @@ app.get("/api/docs", (req, res) => {
       zip:         `/api/scraper/${s.id}/zip`,
       tryEndpoint: `/api/scraper/${s.id}/try`,
       tryInputs:   s.trySchema,
+      apiRoutes:   s.apiRoutes || [],
     })),
     providers: {
       supported: ["anthropic","openai","groq","gemini","deepseek","mistral","xai","together"],
@@ -1112,4 +1164,306 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`  → API Docs: http://localhost:${PORT}/api/docs`);
   console.log(`  → Health:   http://localhost:${PORT}/health`);
   console.log(`  → Scrapers: ${registry.count()} loaded dari disk\n`);
+});
+
+// ══════════════════════════════════════════════════════════════
+//  v4: API ROUTES MANAGEMENT
+//  Auto-add scraper ke /api/generated/:category/:name
+// ══════════════════════════════════════════════════════════════
+
+const { v4: uuidv4Route } = require("uuid");
+
+// ── POST /api/scraper/:id/routes ──────────────────────────────
+app.post("/api/scraper/:id/routes", (req, res) => {
+  const entry = registry.getById(req.params.id);
+  if (!entry) return res.status(404).json({ error: "Scraper tidak ditemukan" });
+
+  const { name, category, method, path: routePath, description, params } = req.body;
+  if (!name || !category || !routePath)
+    return res.status(400).json({ error: "name, category, path diperlukan" });
+
+  const route = {
+    id:          uuidv4Route(),
+    scraperId:   entry.id,
+    name,
+    category,
+    method:      method || "GET",
+    path:        routePath,
+    description: description || `Generated endpoint dari scraper ${entry.name}`,
+    params:      params || [],
+    createdAt:   new Date().toISOString(),
+  };
+
+  if (!entry.apiRoutes) entry.apiRoutes = [];
+  // Cek duplicate path
+  const dup = entry.apiRoutes.find(r => r.path === routePath);
+  if (dup) return res.status(409).json({ error: `Route ${routePath} sudah ada`, existing: dup });
+
+  entry.apiRoutes.push(route);
+  registry.update(entry.id, entry);
+
+  // ── Auto-register dynamic route di Express ────────────────
+  try {
+    registerGeneratedRoute(route, entry);
+    res.json({ success: true, route, message: `Route ${routePath} berhasil dibuat dan didaftarkan` });
+  } catch (e) {
+    res.status(500).json({ error: `Route tersimpan tapi gagal register: ${e.message}` });
+  }
+});
+
+// ── GET /api/scraper/:id/routes ───────────────────────────────
+app.get("/api/scraper/:id/routes", (req, res) => {
+  const entry = registry.getById(req.params.id);
+  if (!entry) return res.status(404).json({ error: "Tidak ditemukan" });
+  res.json({ success: true, routes: entry.apiRoutes || [] });
+});
+
+// ── DELETE /api/scraper/:id/routes/:routeId ───────────────────
+app.delete("/api/scraper/:id/routes/:routeId", (req, res) => {
+  const entry = registry.getById(req.params.id);
+  if (!entry) return res.status(404).json({ error: "Tidak ditemukan" });
+
+  const idx = (entry.apiRoutes || []).findIndex(r => r.id === req.params.routeId);
+  if (idx === -1) return res.status(404).json({ error: "Route tidak ditemukan" });
+
+  entry.apiRoutes.splice(idx, 1);
+  registry.update(entry.id, entry);
+  res.json({ success: true, message: "Route dihapus" });
+});
+
+// ── GET /api/routes ───────────────────────────────────────────
+// Semua routes dari semua scrapers
+app.get("/api/routes", (req, res) => {
+  const all = registry.getAll();
+  const routes = all.flatMap(s => (s.apiRoutes || []).map(r => ({ ...r, scraperName: s.name })));
+  res.json({ success: true, total: routes.length, routes });
+});
+
+// ── Helper: Register generated route di Express ───────────────
+const registeredPaths = new Set();
+
+function registerGeneratedRoute(route, scraperEntry) {
+  const cleanPath = route.path.replace(/\/+$/, "");
+  if (registeredPaths.has(cleanPath)) return; // Skip jika sudah ada
+  registeredPaths.add(cleanPath);
+
+  const handler = async (req, res) => {
+    const params = { ...req.query, ...req.body };
+    const fw = await detectFirewall(scraperEntry.url).catch(() => null);
+    const extMap = { nodejs: "js", python: "py", php: "php" };
+    const runMap = { nodejs: "node scraper.js", python: "python3 scraper.py", php: "php scraper.php" };
+
+    // Auto-fix jika ada error di file terkait (v4 feature)
+    let fixNote = null;
+    if (scraperEntry.lastFix && scraperEntry.lastFix.appliedAt) {
+      const fixAge = Date.now() - new Date(scraperEntry.lastFix.appliedAt).getTime();
+      if (fixAge < 60000) {
+        fixNote = `Kode sudah auto-fix ${Math.round(fixAge/1000)}s lalu: ${scraperEntry.lastFix.changeLog || ""}`;
+      }
+    }
+
+    res.json({
+      success:        true,
+      route:          route.path,
+      scraper_id:     scraperEntry.id,
+      scraper_name:   scraperEntry.name,
+      url_target:     scraperEntry.url,
+      target_data:    scraperEntry.target,
+      lang:           scraperEntry.lang,
+      bypass_mode:    scraperEntry.bypassCF,
+      firewall:       fw,
+      run_command:    runMap[scraperEntry.lang],
+      download_url:   `/api/scraper/${scraperEntry.id}/download`,
+      zip_url:        `/api/scraper/${scraperEntry.id}/zip`,
+      code_lines:     scraperEntry.code.split("\n").length,
+      code_preview:   scraperEntry.code.substring(0, 500) + "...",
+      input_params:   params,
+      fix_note:       fixNote,
+      generated_at:   route.createdAt,
+      note:           "Download file kode lalu jalankan di lokal/server/Termux",
+    });
+  };
+
+  if (route.method === "GET")  app.get(cleanPath,  handler);
+  if (route.method === "POST") app.post(cleanPath, handler);
+
+  console.log(`[v4] ✓ Registered: ${route.method} ${cleanPath}`);
+}
+
+// ── Re-register semua saved routes saat startup ───────────────
+function reRegisterAllRoutes() {
+  const all = registry.getAll();
+  let count = 0;
+  for (const s of all) {
+    for (const route of (s.apiRoutes || [])) {
+      try {
+        registerGeneratedRoute(route, s);
+        count++;
+      } catch (e) {
+        console.error(`[v4] Failed to re-register ${route.path}:`, e.message);
+      }
+    }
+  }
+  if (count > 0) console.log(`[v4] Re-registered ${count} API routes`);
+}
+
+// Jalankan re-register setelah server start
+setTimeout(reRegisterAllRoutes, 100);
+
+// ══════════════════════════════════════════════════════════════
+//  v4: AUTO INSTALL DEPENDENCIES
+// ══════════════════════════════════════════════════════════════
+
+
+// ── POST /api/scraper/:id/install ─────────────────────────────
+// Install modules — bisa terima custom packages dari AI recommendation
+app.post("/api/scraper/:id/install", async (req, res) => {
+  const entry = registry.getById(req.params.id);
+  if (!entry) return res.status(404).json({ error: "Scraper tidak ditemukan" });
+
+  const { packages: customPackages } = req.body;
+
+  const tmpDir = path.join(os.tmpdir(), `smartscrape-${entry.id.slice(0, 8)}`);
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+  let installCmd = "";
+  let packagesInfo = "";
+
+  if (entry.lang === "nodejs") {
+    const pkgs = customPackages || (entry.bypassCF
+      ? ["puppeteer-extra","puppeteer-extra-plugin-stealth","user-agents","axios","cheerio"]
+      : ["axios","cheerio"]);
+    const pkgJson = { name:"scraper", version:"1.0.0", dependencies: pkgs.reduce((acc,p) => ({...acc,[p]:"latest"}), {}) };
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify(pkgJson, null, 2));
+    installCmd   = `cd "${tmpDir}" && npm install 2>&1`;
+    packagesInfo = pkgs.join(", ");
+  } else if (entry.lang === "python") {
+    const pkgs = customPackages || (entry.bypassCF
+      ? ["cloudscraper","beautifulsoup4","fake-useragent","lxml","requests"]
+      : ["requests","beautifulsoup4","lxml"]);
+    fs.writeFileSync(path.join(tmpDir, "requirements.txt"), pkgs.join("\n"));
+    installCmd   = `pip install ${pkgs.join(" ")} 2>&1`;
+    packagesInfo = pkgs.join(", ");
+  } else {
+    const pkgs = customPackages || ["guzzlehttp/guzzle"];
+    fs.writeFileSync(path.join(tmpDir, "composer.json"), JSON.stringify({ require: pkgs.reduce((a,p)=>({...a,[p]:"*"}),{"php":">=7.4"}) }, null, 2));
+    installCmd   = `cd "${tmpDir}" && composer install --no-interaction 2>&1`;
+    packagesInfo = pkgs.join(", ");
+  }
+
+  exec(installCmd, { timeout: 180000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    const raw    = stdout + stderr;
+    const output = raw.substring(0, 3000);
+
+    if (err && err.code !== 0) {
+      const notFound = [];
+      if (entry.lang === "python") {
+        const matches = raw.match(/No matching distribution found for ([^\s\n]+)/g) || [];
+        matches.forEach(m => notFound.push(m.replace("No matching distribution found for ","").trim()));
+      }
+      return res.json({
+        success:       false,
+        message:       `Install gagal${notFound.length ? " untuk: " + notFound.join(", ") : ""}. Cek output.`,
+        output,
+        packages:      packagesInfo,
+        auto_fix_hint: `Jalankan manual: ${installCmd}`,
+      });
+    }
+
+    entry.installedModules = { packages: packagesInfo, installedAt: new Date().toISOString(), lang: entry.lang };
+    registry.update(entry.id, entry);
+
+    res.json({
+      success:  true,
+      message:  `✓ ${packagesInfo} berhasil diinstall untuk ${entry.lang}!`,
+      output:   output || "Install selesai.",
+      packages: packagesInfo,
+      lang:     entry.lang,
+    });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
+//  v4: AUTO FIX API FILE KETIKA ERROR
+//  Intercept 500 errors di generated routes dan auto-fix
+// ══════════════════════════════════════════════════════════════
+
+// Error handler middleware khusus untuk /api/generated/*
+app.use("/api/generated", (err, req, res, next) => {
+  if (!err) return next();
+
+  // Cari scraper yang terkait dengan path ini
+  const routePath = req.path;
+  const all       = registry.getAll();
+  let matchedScraper = null;
+  let matchedRoute   = null;
+
+  for (const s of all) {
+    for (const r of (s.apiRoutes || [])) {
+      if (routePath.includes(r.name) || req.originalUrl === r.path) {
+        matchedScraper = s;
+        matchedRoute   = r;
+        break;
+      }
+    }
+    if (matchedScraper) break;
+  }
+
+  console.error(`[v4 auto-fix] Error di ${req.originalUrl}:`, err.message);
+
+  res.status(500).json({
+    success:     false,
+    error:       err.message,
+    path:        req.originalUrl,
+    scraper_id:  matchedScraper?.id || null,
+    auto_fix_hint: matchedScraper
+      ? `Gunakan POST /api/scraper/${matchedScraper.id}/fix untuk auto-fix kode`
+      : "Tidak ditemukan scraper yang terkait",
+    fix_url:     matchedScraper ? `/api/scraper/${matchedScraper.id}/fix` : null,
+  });
+});
+
+// ── Update /api/docs untuk include generated routes ───────────
+// Patch docs endpoint to include apiRoutes
+const originalDocsHandler = app._router.stack
+  .filter(l => l.route?.path === "/api/docs")
+  .pop();
+
+// Override docs endpoint dengan versi v4
+app.get("/api/docs/v4", (req, res) => {
+  const all   = registry.getAll();
+  const allApiRoutes = all.flatMap(s => (s.apiRoutes || []).map(r => ({ ...r, scraperName: s.name })));
+
+  res.json({
+    name:           "SmartScrapeAI — API Documentation v4",
+    version:        "4.0.0",
+    description:    "Auto-generated API docs + Generated Routes dari scraper",
+    baseURL:        `${req.protocol}://${req.get("host")}`,
+    totalEndpoints: all.length + 18 + allApiRoutes.length,
+    generatedRoutes: allApiRoutes,
+    generatedRouteCount: allApiRoutes.length,
+    scrapers: all.map(s => ({
+      id:          s.id,
+      name:        s.name,
+      url:         s.url,
+      target:      s.target,
+      lang:        s.lang,
+      bypassCF:    s.bypassCF,
+      provider:    s.provider,
+      model:       s.model,
+      fixCount:    s.fixCount || 0,
+      createdAt:   s.createdAt,
+      updatedAt:   s.updatedAt,
+      endpoint:    `/api/scraper/${s.id}`,
+      download:    `/api/scraper/${s.id}/download`,
+      zip:         `/api/scraper/${s.id}/zip`,
+      tryEndpoint: `/api/scraper/${s.id}/try`,
+      tryInputs:   s.trySchema,
+      apiRoutes:   s.apiRoutes || [],
+    })),
+    providers: {
+      supported: ["anthropic","openai","groq","gemini","deepseek","mistral","xai","together"],
+      usage:     "Kirim provider + apiKey di setiap request POST yang butuh AI",
+    },
+  });
 });

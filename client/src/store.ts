@@ -1,10 +1,10 @@
 // ════════════════════════════════════════
-//  SmartScrapeAI v3 — Zustand Store
+//  SmartScrapeAI v4 — Zustand Store
 // ════════════════════════════════════════
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { View, Provider, Lang, FixMode, AnalyzeResult, Scraper, Toast, FixResult } from "./types";
+import type { View, Provider, Lang, FixMode, AnalyzeResult, Scraper, Toast, FixResult, TrySchemaField } from "./types";
 
 let toastCounter = 0;
 
@@ -28,7 +28,7 @@ interface AppState {
   genTarget:     string;
   genLang:       Lang;
   genBypassCF:   boolean;
-  genResult:     { id: string; code: string } | null;
+  genResult:     { id: string; code: string; trySchema?: TrySchemaField[] } | null;
 
   setGenStep:     (s: 0 | 1 | 2 | 3) => void;
   setGenUrl:      (u: string) => void;
@@ -36,7 +36,7 @@ interface AppState {
   setGenTarget:   (t: string) => void;
   setGenLang:     (l: Lang) => void;
   setGenBypassCF: (b: boolean) => void;
-  setGenResult:   (r: { id: string; code: string } | null) => void;
+  setGenResult:   (r: { id: string; code: string; trySchema?: TrySchemaField[] } | null) => void;
   resetGen:       () => void;
 
   // ── Scrapers ──────────────────────────
@@ -86,7 +86,10 @@ export const useStore = create<AppState>()(
       setGenLang:     (l) => set({ genLang: l }),
       setGenBypassCF: (b) => set({ genBypassCF: b }),
       setGenResult:   (r) => set({ genResult: r }),
-      resetGen:       () => set({ genStep: 0, genUrl: "", genAnalysis: null, genTarget: "", genBypassCF: false, genResult: null }),
+      resetGen: () => set({
+        genStep: 0, genUrl: "", genAnalysis: null,
+        genTarget: "", genLang: "nodejs", genBypassCF: false, genResult: null,
+      }),
 
       // ── Scrapers ──────────────────────
       scrapers:    [],
@@ -95,26 +98,29 @@ export const useStore = create<AppState>()(
       // ── Fix Engine ────────────────────
       fixScraperId: null,
       fixResult:    null,
-      setFixScraperId: (id) => set({ fixScraperId: id, fixResult: null }),
+      setFixScraperId: (id) => set({ fixScraperId: id }),
       setFixResult:    (r)  => set({ fixResult: r }),
 
       // ── Toasts ────────────────────────
-      toasts: [],
-      addToast: (type, msg) => {
-        const id = `toast-${++toastCounter}`;
-        set(s => ({ toasts: [...s.toasts, { id, type, msg }] }));
-        setTimeout(() => set(s => ({ toasts: s.toasts.filter(t => t.id !== id) })), 4500);
-      },
-      removeToast: (id) => set(s => ({ toasts: s.toasts.filter(t => t.id !== id) })),
+      toasts:      [],
+      addToast: (type, msg) => set(state => ({
+        toasts: [
+          ...state.toasts.slice(-4),
+          { id: `${Date.now()}-${toastCounter++}`, type, msg },
+        ],
+      })),
+      removeToast: (id) => set(state => ({
+        toasts: state.toasts.filter(t => t.id !== id),
+      })),
     }),
     {
-      name:    "smartscrapeai-v3",
-      // Hanya persist config provider, bukan state generator / scrapers
+      name: "smartscrape-v4",
       partialize: (s) => ({
-        provider:   s.provider,
-        apiKey:     s.apiKey,
-        model:      s.model,
-        activeView: s.activeView,
+        provider: s.provider,
+        apiKey:   s.apiKey,
+        model:    s.model,
+        genUrl:   s.genUrl,
+        genLang:  s.genLang,
       }),
     }
   )

@@ -1,5 +1,5 @@
 // ════════════════════════════════════════
-//  SmartScrapeAI v3 — Type Definitions
+//  SmartScrapeAI v4 — Type Definitions
 // ════════════════════════════════════════
 
 export type Lang      = "nodejs" | "python" | "php";
@@ -23,10 +23,24 @@ export interface FirewallResult {
   response_time_ms:   number | null;
 }
 
+export interface RecommendedModule {
+  packages:    string[];
+  reason:      string;
+  install_cmd: string;
+}
+
 export interface AiAnalysis {
-  greeting:    string;
-  question:    string;
-  suggestions: string[];
+  greeting:             string;
+  question:             string;
+  suggestions:          string[];
+  site_type?:           string;
+  complexity?:          string;
+  complexity_reason?:   string;
+  recommended_modules?: {
+    nodejs:  RecommendedModule;
+    python:  RecommendedModule;
+    php:     RecommendedModule;
+  };
 }
 
 export interface AnalyzeResult {
@@ -51,6 +65,18 @@ export interface ScraperHistory {
   changeLog: string;
 }
 
+export interface ApiRoute {
+  id:          string;
+  scraperId:   string;
+  name:        string;
+  category:    string;
+  method:      "GET" | "POST";
+  path:        string;
+  description: string;
+  params?:     Array<{ name: string; type: string; required: boolean; description: string }>;
+  createdAt:   string;
+}
+
 export interface Scraper {
   id:         string;
   name:       string;
@@ -68,6 +94,7 @@ export interface Scraper {
   fixCount:   number;
   history:    ScraperHistory[];
   lastFix?:   { appliedAt: string; changeLog: string };
+  apiRoutes?: ApiRoute[];
 }
 
 export interface GenerateResult {
@@ -157,9 +184,26 @@ export interface ApiDocs {
     endpoint:    string;
     download:    string;
     zip:         string;
+    tryEndpoint: string;
+    tryInputs?:  TrySchemaField[];
+    apiRoutes?:  ApiRoute[];
   }>;
   providers: {
     supported: string[];
     usage:     string;
   };
+}
+
+export interface TryOutputResult {
+  scraperId:    string;
+  scraper:      string;
+  target:       string;
+  firewall:     FirewallResult;
+  run_command:  string;
+  download:     string;
+  zip:          string;
+  code_lines:   number;
+  code_preview: string;
+  note:         string;
+  asApiRoute?:  ApiRoute;
 }

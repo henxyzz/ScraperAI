@@ -48,7 +48,7 @@ export default function App() {
               <span className="logo-scrape">Scrape</span>
               <span className="logo-ai">AI</span>
             </div>
-            <div className="sidebar-ver">v3.0</div>
+            <div className="sidebar-ver">v4.0</div>
           </div>
 
           <nav className="sidebar-nav">
@@ -65,7 +65,7 @@ export default function App() {
           </nav>
 
           <div className="sidebar-footer">
-            <div className="sidebar-version">henhendrazat © 2025</div>
+            <div className="sidebar-version">henhendrazat © 2025 · v4</div>
           </div>
         </aside>
 

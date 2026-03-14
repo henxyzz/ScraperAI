@@ -151,7 +151,7 @@ export function FixEngineView() {
   };
 
   return (
-    <div style={{ display: "flex", gap: 16 }}>
+    <div className="fix-engine-layout" style={{ display: "flex", gap: 16 }}>
       {/* Left: config panel */}
       <div style={{ width: 320, flexShrink: 0, display: "flex", flexDirection: "column", gap: 14 }}>
         {/* Select Scraper */}

@@ -1,7 +1,7 @@
 {
   "name": "smartscrapeai",
-  "version": "3.0.0",
-  "description": "SmartScrapeAI v3 — AI-Powered Web Scraper Generator, Multi-Provider, React + TypeScript",
+  "version": "4.0.0",
+  "description": "SmartScrapeAI v4 - AI Scraper Generator with Module Recommendations & API Routes",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

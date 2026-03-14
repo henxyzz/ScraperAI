@@ -693,3 +693,205 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
   .apikey-input { width: 160px; }
   .scraper-grid { grid-template-columns: 1fr; }
 }
+
+/* ════════════════════════════════════════
+   SmartScrapeAI v4 — New Components CSS
+════════════════════════════════════════ */
+
+/* ── Summary box ─────────────────────────────────────── */
+.summary-box {
+  background: rgba(0,0,0,.3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+/* ── Template grid ───────────────────────────────────── */
+.template-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;
+}
+.template-card {
+  background: rgba(0,0,0,.3); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 12px; text-align: left;
+  cursor: pointer; transition: border-color .15s;
+}
+.template-card:hover { border-color: var(--neon); }
+
+/* ── Module recommendation ───────────────────────────── */
+.module-rec-item {
+  background: rgba(0,0,0,.25); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 12px 14px;
+  cursor: pointer; transition: all .15s;
+}
+.module-rec-item:hover  { border-color: var(--border3); }
+.module-rec-item.active { border-color: var(--neon); background: rgba(46,255,168,.04); }
+
+.module-pkg-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: rgba(176,111,255,.1); border: 1px solid rgba(176,111,255,.2);
+  color: var(--neon3); border-radius: 5px; padding: 2px 8px;
+  font-family: var(--mono); font-size: 10px;
+}
+.module-pkg-badge svg { width: 9px; height: 9px; }
+
+.module-cmd {
+  display: block; font-family: var(--mono); font-size: 11px;
+  color: var(--neon2); background: rgba(0,0,0,.4);
+  padding: 6px 10px; border-radius: 6px; word-break: break-all;
+}
+.module-install-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+
+/* ── Install output ──────────────────────────────────── */
+.install-output {
+  font-family: var(--mono); font-size: 10px; color: var(--text2);
+  background: rgba(0,0,0,.4); padding: 10px; border-radius: 6px;
+  max-height: 150px; overflow-y: auto; width: 100%;
+  white-space: pre-wrap; word-break: break-all; margin-top: 8px;
+}
+
+/* ── Try Output ──────────────────────────────────────── */
+.try-output-card {
+  background: rgba(0,0,0,.3); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.try-output-row { display: flex; gap: 10px; font-size: 12px; align-items: flex-start; }
+.try-key {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  width: 70px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 1px; padding-top: 1px;
+}
+.try-val { color: var(--text2); word-break: break-all; }
+.try-code {
+  font-family: var(--mono); font-size: 11px; color: var(--neon2);
+  background: rgba(0,0,0,.3); padding: 2px 8px; border-radius: 4px;
+}
+.try-preview {
+  font-family: var(--mono); font-size: 10px; color: var(--text2);
+  background: rgba(0,0,0,.3); padding: 8px; border-radius: 6px;
+  max-height: 120px; overflow-y: auto; flex: 1;
+  white-space: pre-wrap; word-break: break-all;
+}
+
+/* ── API Route Builder ───────────────────────────────── */
+.api-route-toggle {
+  background: rgba(176,111,255,.05); border: 1px solid rgba(176,111,255,.2);
+  border-radius: var(--radius); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.api-route-check-label {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  font-size: 13px;
+}
+.api-route-checkbox {
+  width: 15px; height: 15px; cursor: pointer; accent-color: var(--neon3);
+}
+.api-route-config {
+  background: rgba(0,0,0,.25); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.api-route-preview-path {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(0,0,0,.3); padding: 8px 12px; border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+/* ── Generated routes in Docs ────────────────────────── */
+.generated-route-card {
+  background: rgba(0,0,0,.25); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 12px 14px;
+  transition: border-color .15s;
+}
+.generated-route-card:hover { border-color: var(--neon3); }
+
+.scraper-doc-card {
+  background: rgba(0,0,0,.3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 15px;
+  transition: border-color .15s;
+}
+.scraper-doc-card:hover { border-color: var(--border3); }
+
+.docs-header-grid {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  flex-wrap: wrap; gap: 16px;
+}
+
+/* ── Btn variants ────────────────────────────────────── */
+.btn-neon-ghost {
+  background: rgba(46,255,168,.08); border: 1px solid rgba(46,255,168,.25);
+  color: var(--neon); border-radius: 8px; padding: 7px 14px;
+  font-size: 12px; transition: all .15s;
+}
+.btn-neon-ghost:hover { background: rgba(46,255,168,.14); }
+
+/* ── Responsive mobile-first v4 ─────────────────────── */
+@media (max-width: 640px) {
+  .sidebar {
+    position: fixed; bottom: 0; left: 0; right: 0; top: auto;
+    width: 100%; height: 60px; flex-direction: row;
+    border-right: none; border-top: 1px solid var(--border);
+    z-index: 200;
+  }
+  .sidebar-logo, .sidebar-footer { display: none; }
+  .sidebar-nav {
+    flex-direction: row; padding: 6px 10px;
+    gap: 0; justify-content: space-around; align-items: center;
+  }
+  .nav-item {
+    flex-direction: column; gap: 3px; padding: 6px 10px;
+    font-size: 10px; align-items: center; min-width: 56px;
+  }
+  .nav-item .nav-item-label { display: block; font-size: 9px; }
+  .nav-badge { display: none; }
+  .main-area { padding-bottom: 64px; }
+  .content-area { padding: 12px; }
+  .topbar { padding: 8px 12px; gap: 8px; }
+  .topbar .topbar-title { font-size: 11px; }
+  .apikey-input { width: 130px; }
+  .model-input { width: 110px; }
+  .scraper-grid { grid-template-columns: 1fr; }
+  .template-grid { grid-template-columns: 1fr; }
+  .lang-selector { flex-direction: column; }
+  .lang-opt { min-width: unset; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .fix-mode-grid { grid-template-columns: repeat(2, 1fr); }
+  /* Fix Engine layout on mobile */
+  .fix-engine-layout { flex-direction: column !important; }
+  /* Scrapers detail pane on mobile */
+  .scraper-detail-pane { width: 100% !important; position: relative !important; top: auto !important; }
+  /* Search bar wrap */
+  .search-bar { flex-wrap: wrap; }
+  .search-input-wrap { width: 100%; }
+  .module-install-row { flex-direction: column; align-items: flex-start; }
+  .api-route-config > div { flex-direction: column; }
+  .docs-header-grid { flex-direction: column; }
+  .try-output-row { flex-wrap: wrap; }
+  .try-key { width: auto; min-width: 60px; }
+}
+
+@media (min-width: 641px) and (max-width: 900px) {
+  .sidebar { width: 64px; }
+  .sidebar-logo-mark, .sidebar-ver, .nav-item-label, .nav-badge { display: none; }
+  .nav-item { justify-content: center; padding: 12px 8px; }
+  .content-area { padding: 16px; }
+  .scraper-detail-pane { width: 360px !important; }
+}
+
+/* ── Module rec item (Step 1 analysis cards) ─────────── */
+.module-rec-item {
+  background: rgba(0,0,0,.25); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 12px 14px;
+  cursor: pointer; transition: border-color .15s, background .15s;
+}
+.module-rec-item:hover  { border-color: var(--border3); }
+.module-rec-item.active { border-color: var(--neon); background: rgba(46,255,168,.04); }
+
+/* ── Scrapers layout responsive ──────────────────────── */
+.scrapers-layout { display: flex; gap: 16px; }
+@media (max-width: 768px) {
+  .scrapers-layout { flex-direction: column; }
+  .scraper-detail-pane { width: 100% !important; }
+}
+
+/* ── lang-opt AI rec badge ───────────────────────────── */
+.lang-opt { display: flex; flex-direction: column; gap: 2px; }

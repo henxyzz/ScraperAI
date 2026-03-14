@@ -1,108 +1,67 @@
-# SmartScrapeAI v3.0
+# SmartScrapeAI v4.0
 
-AI-Powered Web Scraper Generator dengan Multi-Provider AI, React + TypeScript frontend, dan AI Fix Engine.
+AI-powered web scraper generator dengan fitur:
+- 🧠 **AI Module Recommendations** — AI analisa site dan rekomendasikan library paling cocok
+- ⚡ **Auto Install** — Install dependencies langsung dari UI dengan 1 klik
+- 🔌 **Try Output → API Route** — Output scraper bisa dijadikan API endpoint (`/api/generated/:category/:name`)
+- 📚 **Frontend API Docs** — Docs lengkap semua endpoint termasuk generated routes
+- 🛠️ **Auto Fix Engine** — AI auto-fix error kode scraper
+- 📱 **Responsive Mobile** — UI responsif untuk HP dan Desktop
+- 🔥 **Multi-provider** — Anthropic, OpenAI, Groq, Gemini, DeepSeek, Mistral, xAI, Together
 
-## Bug Fixes dari v2 → v3
-
-| Bug | Status |
-|-----|--------|
-| `registry.getById` tidak ada — semua endpoint scraper crash 500 | FIXED |
-| Rate limiter di-import tapi tidak di-setup | FIXED |
-| JSZip di-install tapi tidak ada endpoint download ZIP | FIXED |
-| Registry in-memory — data hilang saat restart | FIXED (JSON persistence) |
-| Frontend HTML 1770 baris monolitik | REPLACED (React + TypeScript) |
-| Tidak ada validasi provider API key | ADDED |
-| Tidak ada search/filter scraper | ADDED |
-| Tidak ada stats endpoint | ADDED |
-| Tidak ada export semua scraper ke ZIP | ADDED |
-| Tidak ada templates scraper | ADDED |
-
-## Tech Stack
-
-**Backend**
-- Node.js + Express
-- Multi-provider AI: Anthropic, OpenAI, Groq, Gemini, DeepSeek, Mistral, xAI, Together
-- JSON file persistence (`data/scrapers.json`)
-- Rate limiting per-route
-- JSZip untuk download paket
-
-**Frontend**
-- React 18 + TypeScript
-- Vite (dev server + build)
-- Zustand state management
-- Custom syntax highlighter tanpa dependensi besar
-- Dark neon terminal aesthetic
-
-## Cara Install & Run
-
-### Development (dengan Vite dev server)
+## Quick Start
 
 ```bash
-# Install server dependencies
+# 1. Install dependencies
 npm install
-
-# Install client dependencies
 cd client && npm install && cd ..
 
-# Jalankan backend + frontend (2 terminal)
-npm run dev              # Backend: http://localhost:8080
-cd client && npm run dev # Frontend: http://localhost:5173
+# 2. Copy env
+cp .env.example .env
+
+# 3. Dev mode (server + vite)
+npm run dev:all
+
+# 4. Production build
+npm run build && npm start
 ```
 
-Frontend dev server (port 5173) otomatis proxy `/api` ke backend (port 8080).
+## Environment Variables
 
-### Production
-
-```bash
-# Build React frontend
-npm run build   # atau: cd client && npm run build
-
-# Start server (serves React build + API)
-NODE_ENV=production npm start
+```env
+PORT=8080
+NODE_ENV=development
 ```
 
-### Docker
+## API Endpoints v4
 
-```bash
-docker-compose up -d
-```
-
-## Fitur
-
-- **4-step Generator**: URL → AI Analisa → Konfigurasi → Kode siap pakai
-- **Firewall Detection**: Otomatis deteksi Cloudflare, WAF, bot protection
-- **Bypass Mode**: Puppeteer stealth (Node.js) / cloudscraper (Python)
-- **3 Bahasa**: Node.js, Python, PHP
-- **AI Fix Engine**: Analisa error + 4 fix mode (auto/patch/rewrite/enhance)
-- **Version History**: Riwayat setiap kali fix diterapkan + revert
-- **Manual Edit**: Edit kode via instruksi bahasa natural ke AI
-- **Download**: File langsung, atau ZIP (kode + requirements + README)
-- **Export All**: Download semua scraper sebagai satu ZIP
-- **API Docs**: Auto-generated docs dari semua scraper yang dibuat
-- **Persistence**: Data tersimpan ke `data/scrapers.json`, tidak hilang saat restart
-
-## API Endpoints
-
-| Method | Path | Deskripsi |
+| Method | Path | Keterangan |
 |--------|------|-----------|
 | GET | /health | Health check |
-| POST | /api/validate | Validasi API key provider |
-| POST | /api/analyze | Analisa URL + deteksi firewall |
+| POST | /api/analyze | Analisa URL + rekomendasi module AI |
 | POST | /api/generate | Generate kode scraper |
-| GET | /api/scrapers | Daftar semua scraper |
-| GET | /api/scrapers/stats | Statistik scrapers |
-| GET | /api/scrapers/search | Cari scraper |
-| GET | /api/templates | Template scraper tersedia |
-| GET | /api/export/zip | Export semua scraper ke ZIP |
-| GET | /api/scraper/:id | Detail scraper |
-| GET | /api/scraper/:id/download | Download file kode |
-| GET | /api/scraper/:id/zip | Download ZIP |
-| GET | /api/scraper/:id/history | Riwayat versi |
-| POST | /api/scraper/:id/fix | AI auto-fix |
-| POST | /api/scraper/:id/apply | Terapkan fix |
-| POST | /api/scraper/:id/revert | Revert ke versi sebelumnya |
-| POST | /api/scraper/:id/edit | Edit via instruksi AI |
-| DELETE | /api/scraper/:id | Hapus scraper |
+| POST | /api/scraper/:id/install | Auto install dependencies |
+| GET | /api/routes | Semua generated API routes |
+| POST | /api/scraper/:id/routes | Buat API route baru dari Try Output |
+| GET | /api/generated/:category/:name | Endpoint yang di-generate |
+| POST | /api/scraper/:id/fix | AI auto-fix error |
+| GET | /api/docs | API documentation |
 
----
-Copyright 2025 henhendrazat — SmartScrapeAI v3.0
+## Fitur v4 Baru
+
+### AI Module Recommendations
+Saat analisa URL, AI secara otomatis mendeteksi:
+- Tipe site (ecommerce, news, social, dll)
+- Kompleksitas scraping (simple/moderate/complex)
+- Library terbaik untuk Node.js, Python, PHP
+- Jika perlu bypass Cloudflare/WAF atau tidak
+
+### Try Output → API Route
+1. Generate scraper
+2. Klik "Run Try Output" 
+3. Centang "Jadikan API Route"
+4. Set kategori & nama route
+5. Auto tersimpan di `/api/generated/kategori/nama`
+
+### Auto Install
+Klik "Auto Install Modules" di Step 3 — sistem langsung install package yang direkomendasi AI.
