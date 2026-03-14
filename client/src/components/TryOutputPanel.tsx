@@ -26,9 +26,9 @@ export function TryOutputPanel({ scraper, compact = false }: Props) {
   const handleTry = async () => {
     setLoading(true); setResult(null); setError(null);
     try {
-      const res = await tryScraper(scraper.id, inputs);
+      const res = await tryScraper(scraper.id, inputs) as any;
       setResult(res);
-      if (!res.success) setError(res.error || "Gagal scraping");
+      if (!res.success) setError(res.error || res.preview?.error || "Gagal scraping");
     } catch (e: any) {
       setError(e.message);
     } finally {
