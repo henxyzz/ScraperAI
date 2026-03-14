@@ -721,7 +721,8 @@ function ApiRoutesPanel({ scraperId, scraperName }:ApiRoutesPanelProps) {
 
   const buildQS = (params:ApiRoute["params"]|undefined, vals:Record<string,string>) => {
     if(!params) return "";
-    const q = params.filter(p=>vals[p.name]).map(p=>`${p.name}=${encodeURIComponent(vals[p.name])}`).join("&");
+    type RouteParam = { name: string; type: string; required: boolean; description: string };
+    const q = (params as RouteParam[]).filter((p: RouteParam) => Boolean(vals[p.name])).map((p: RouteParam) => `${p.name}=${encodeURIComponent(vals[p.name])}`).join("&");
     return q?`?${q}`:"";
   };
 
@@ -1140,7 +1141,7 @@ function Step0UrlPanel({
           {/* SSE Logs */}
           {logs.length > 0 && (
             <div style={{background:"rgba(0,0,0,.4)",border:"1px solid var(--border2)",borderRadius:9,overflow:"hidden"}}>
-              <button onClick={()=>setShowLogs((p: boolean)=>!p)}
+              <button onClick={()=>setShowLogs(!showLogs)}
                 style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 13px",
                   background:"transparent",border:"none",cursor:"pointer",color:"var(--muted)",
                   fontFamily:"var(--mono)",fontSize:10,textAlign:"left"}}>
