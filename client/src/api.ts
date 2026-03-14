@@ -9,7 +9,7 @@ import type {
   Lang, Provider, FixMode,
 } from "./types";
 
-const BASE = import.meta.env.DEV ? "" : "";  // proxy handles /api in dev
+const BASE = "";  // Vite proxy handles /api → backend in dev, same origin in prod
 
 const api = axios.create({
   baseURL: BASE,
