@@ -36,14 +36,16 @@ export function GeneratorView() {
     resetGen, addToast,
   } = useStore();
 
-  const [loadingAnalyze,  setLoadingAnalyze]  = useState(false);
-  const [loadingGenerate, setLoadingGenerate] = useState(false);
-  const [templates,       setTemplates]       = useState<Template[]>([]);
-  const [showTemplates,   setShowTemplates]   = useState(false);
-  const [checkedFields,   setCheckedFields]   = useState<Record<number,boolean>>({});
-  const [moduleType,      setModuleType]      = useState<ModuleType>("commonjs");
-  const [installLoading,  setInstallLoading]  = useState(false);
-  const [installResult,   setInstallResult]   = useState<{success:boolean;message:string;output:string}|null>(null);
+  const [loadingAnalyze,     setLoadingAnalyze]     = useState(false);
+  const [loadingGenerate,    setLoadingGenerate]    = useState(false);
+  const [templates,          setTemplates]          = useState<Template[]>([]);
+  const [showTemplates,      setShowTemplates]      = useState(false);
+  const [checkedFields,      setCheckedFields]      = useState<Record<number,boolean>>({});
+  const [moduleType,         setModuleType]         = useState<ModuleType>("commonjs");
+  const [installLoading,     setInstallLoading]     = useState(false);
+  const [installResult,      setInstallResult]      = useState<{success:boolean;message:string;output:string}|null>(null);
+  // Store deep DOM selectors from scan to pass to generate
+  const [scanSmartSelectors, setScanSmartSelectors] = useState<any[]>([]);
 
   const canProceed = !!apiKey.trim();
 
@@ -143,12 +145,20 @@ export function GeneratorView() {
       url: genUrl, target: genTarget, lang: genLang,
       bypassCF: String(genBypassCF), provider, apiKey, model: model || "",
       moduleType: genLang === "nodejs" ? moduleType : "",
-      siteType:   genAnalysis?.ai?.site_type || "",
-      pageType:   "",
+      siteType:    genAnalysis?.ai?.site_type || "",
+      pageType:    "",
       searchQuery: "",
-      selectors:  genAnalysis?.ai?.css_selectors?.selectors
-        ? JSON.stringify(genAnalysis.ai.css_selectors.selectors.map((s: string) => ({ category: "css", selector: s, label: s })))
-        : "",
+      // Prioritize deep DOM scan selectors (most accurate), fallback to AI css selectors
+      selectors: (() => {
+        if (scanSmartSelectors.length > 0) {
+          return JSON.stringify(scanSmartSelectors);
+        }
+        const aiSels = genAnalysis?.ai?.css_selectors?.selectors;
+        if (aiSels?.length) {
+          return JSON.stringify(aiSels.map((s: string) => ({ selector: s, category: "css", count: 0, fields: [], rawFields: [] })));
+        }
+        return "";
+      })(),
     });
     const evtSrc = new EventSource(`/api/generate/stream?${params.toString()}`);
 
@@ -232,6 +242,7 @@ export function GeneratorView() {
           logRef={logRef}
           genTarget={genTarget} setGenTarget={setGenTarget}
           addToast={addToast}
+          onScanComplete={(selectors) => setScanSmartSelectors(selectors || [])}
         />
       )}
 
@@ -975,13 +986,14 @@ interface Step0Props {
   logRef: React.RefObject<HTMLDivElement>;
   genTarget: string; setGenTarget: (t:string)=>void;
   addToast: (type:any, msg:string)=>void;
+  onScanComplete?: (selectors: any[]) => void;
 }
 
 function Step0UrlPanel({
   genUrl, setGenUrl, loadingAnalyze, canProceed,
   handleAnalyze, loadTemplates, showTemplates, templates, applyTemplate,
   logs, showLogs, setShowLogs, logRef,
-  genTarget, setGenTarget, addToast,
+  genTarget, setGenTarget, addToast, onScanComplete,
 }: Step0Props) {
   const [scanning,       setScanning]       = useState(false);
   const [scanResult,     setScanResult]     = useState<PrefetchResult|null>(null);
@@ -1025,8 +1037,10 @@ function Step0UrlPanel({
       setScanResult(res);
       if (!res.success) addToast("warn", res.error || "Scan gagal, coba Analisa langsung");
       else {
-        addToast("success", `${res.elements.length} tipe elemen ditemukan di ${res.host}`);
+        addToast("success", `${res.elements.length} pola elemen ditemukan di ${res.host}`);
         if (res.elements.length > 0) setActiveCategory(res.elements[0].category);
+        // Pass smart selectors with field data up to parent for generate
+        if (onScanComplete && res.smartSelectors) onScanComplete(res.smartSelectors);
       }
     } catch(e:any) { addToast("error", e.message); }
     finally { setScanning(false); }

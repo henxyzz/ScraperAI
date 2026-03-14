@@ -587,9 +587,17 @@ app.post("/api/prefetch", async (req, res) => {
     const title = (() => { try { return $("title").first().text().trim().substring(0, 100); } catch { return ""; } })();
 
     const smartSelectors = elements
-      .filter(e => e.selector && e.selector !== "meta")
+      .filter(e => e.selector && e.selector !== "meta" && e.selector !== "script[type='application/ld+json']")
       .slice(0, 6)
-      .map(e => ({ category: e.category, selector: e.selector, label: e.label }));
+      .map(e => ({
+        category:  e.category,
+        selector:  e.selector,
+        label:     e.label,
+        count:     e.count,
+        fields:    e.fields    || [],
+        rawFields: e.rawFields || [],
+        priority:  e.priority  || 0,
+      }));
 
     res.json({
       success:            true,
@@ -1072,468 +1080,494 @@ function detectSiteType(url, $, htmlRaw) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  SMART ELEMENT DETECTOR — Context-aware per site type
+//  DEEP DOM ANALYSIS ENGINE
+//  Analisa struktur DOM nyata — temukan pola berulang,
+//  ekstrak field aktual, TANPA asumsi nama class apapun
 // ══════════════════════════════════════════════════════════════
-function detectSmartElements(url, $, htmlRaw, siteType) {
-  const elements = [];
-  const host = (() => { try { return new URL(url).hostname; } catch { return url; } })();
 
-  // ── Helper: find best repeating card selector ──────────────
-  function findCardSelector(patterns) {
-    for (const sel of patterns) {
-      try {
-        const count = $(sel).length;
-        if (count >= 3) return { sel, count };
-      } catch {}
-    }
-    return null;
-  }
+/**
+ * Buat CSS selector unik untuk elemen berdasarkan tag + class (max 2 class)
+ */
+function makeSelector(el, $) {
+  const tag  = el.tagName || "div";
+  const cls  = ($(el).attr("class") || "").split(/\s+/).filter(c => c.length > 1 && c.length < 40 && !/^[0-9]/.test(c));
+  if (cls.length > 0) return `${tag}.${cls.slice(0, 2).join(".")}`;
+  const id = $(el).attr("id");
+  if (id) return `${tag}#${id}`;
+  return tag;
+}
 
-  function extractCardData(sel, maxItems = 5) {
-    const samples = [];
-    $(sel).slice(0, maxItems).each((_, el) => {
-      const title  = $(el).find("h1,h2,h3,h4,[class*='title'],[class*='name'],[class*='judul']").first().text().trim();
-      const img    = $(el).find("img").first().attr("src") || $(el).find("img").first().attr("data-src") || "";
-      const link   = $(el).find("a[href]").first().attr("href") || "";
-      const rating = $(el).find("[class*='rating'],[class*='imdb'],[class*='score'],[class*='vote']").first().text().trim();
-      const year   = $(el).find("[class*='year'],[class*='tahun']").first().text().trim() ||
-                     (title.match(/\((\d{4})\)/) || [])[1] || "";
-      const info   = [title, year, rating].filter(Boolean).join(" | ");
-      if (info.length > 2) samples.push(info.substring(0, 120));
-    });
-    return samples;
-  }
+/**
+ * Hitung "kekayaan" konten sebuah elemen — makin banyak field nyata makin tinggi
+ */
+function scoreElement(el, $) {
+  let score = 0;
+  const texts = $(el).find("*").map((_, c) => $(c).clone().children().remove().end().text().trim()).get().filter(t => t.length > 1);
+  const hasImg    = $(el).find("img[src], img[data-src], img[data-lazy]").length > 0;
+  const hasLink   = $(el).find("a[href]").length > 0;
+  const hasText   = texts.length >= 1;
+  const textLen   = texts.join(" ").length;
+  const hasNum    = texts.some(t => /[\d,\.]+/.test(t));
+  const hasDate   = texts.some(t => /\d{4}|\d{1,2}[\/\-]\d{1,2}/.test(t));
+  if (hasImg)    score += 3;
+  if (hasLink)   score += 2;
+  if (hasText)   score += 1;
+  if (hasNum)    score += 1;
+  if (hasDate)   score += 1;
+  if (textLen > 20 && textLen < 500) score += 2;
+  return score;
+}
 
-  // ── STREAMING SITE ──────────────────────────────────────────
-  if (siteType === "streaming") {
-    // 1. Movie/video card list
-    const cardPatterns = [
-      "[class*='movie-item']","[class*='film-item']","[class*='video-item']",
-      "[class*='movie-card']","[class*='film-card']","[class*='video-card']",
-      "[class*='movie_item']","[class*='film_item']",
-      "[class*='post-item']","[class*='item-film']",
-      ".movies li","#movies li",".film-list li",
-      "[class*='grid'] article","[class*='list'] article",
-      "article[class*='movie']","article[class*='film']",
-      ".content-film li", ".daftar-film li",
-      "ul.film > li", "ul.movies > li",
-      // Fallback: any repeating article/li with poster image
-      ".main li:has(img)", ".content li:has(img)",
-    ];
-    const card = findCardSelector(cardPatterns);
-    if (card) {
-      const samples = extractCardData(card.sel);
-      const selShort = card.sel.substring(0, 50);
-      elements.push({
-        category: "movies",
-        label: `Daftar Film/Video (${card.count} item)`,
-        selector: card.sel,
-        preview: samples.length ? samples : [`${card.count} kartu film ditemukan`],
-        count: card.count,
-        target: `daftar film/video: judul, tahun, poster URL, rating, link detail — selector: ${selShort}`,
-        priority: 10,
-      });
-    }
+/**
+ * Ekstrak semua field nyata dari sebuah card element
+ * Return: { fields: [{name, value, type}], selector }
+ */
+function extractCardFields(el, $, baseUrl) {
+  const fields = [];
+  const seen   = new Set();
 
-    // 2. Series/Episode list
-    const epPatterns = [
-      "[class*='episode']","[class*='eps']","[class*='season']",
-      ".episode-list li","#episode li","[class*='list-eps']",
-      "[class*='episode_list']","[class*='episodelist']",
-    ];
-    const ep = findCardSelector(epPatterns);
-    if (ep) {
-      const samples = [];
-      $(ep.sel).slice(0, 5).each((_, el) => {
-        const txt = $(el).text().replace(/\s+/g, " ").trim().substring(0, 100);
-        if (txt.length > 2) samples.push(txt);
-      });
-      elements.push({
-        category: "episodes",
-        label: `Daftar Episode (${ep.count} episode)`,
-        selector: ep.sel,
-        preview: samples,
-        count: ep.count,
-        target: `daftar episode: nomor episode, judul episode, link streaming — selector: ${ep.sel.substring(0, 50)}`,
-        priority: 9,
-      });
-    }
+  const addField = (name, value, type = "text") => {
+    if (!value || seen.has(value.substring(0, 40))) return;
+    seen.add(value.substring(0, 40));
+    fields.push({ name, value: value.substring(0, 200), type });
+  };
 
-    // 3. Genre / Category navigation
-    const genrePatterns = [
-      "[class*='genre'] a","[class*='category'] a","[class*='kategori'] a",
-      "nav a[href*='genre']","nav a[href*='category']","a[href*='/genre/']",
-      "[class*='genre-list'] a","[class*='cat-list'] a",
-    ];
-    const genres = [];
-    for (const sel of genrePatterns) {
-      try {
-        $(sel).slice(0, 10).each((_, el) => {
-          const txt = $(el).text().trim();
-          if (txt.length > 1 && txt.length < 40) genres.push(txt);
-        });
-        if (genres.length >= 3) break;
-      } catch {}
-    }
-    if (genres.length >= 2) {
-      elements.push({
-        category: "genres",
-        label: `Genre / Kategori (${genres.length} genre)`,
-        selector: genrePatterns.find(s => { try { return $(s).length >= 2; } catch { return false; } }) || "nav a",
-        preview: genres.slice(0, 5),
-        count: genres.length,
-        target: `daftar genre/kategori: nama genre dan URL linknya`,
-        priority: 7,
-      });
-    }
+  // ── Judul / Title ─────────────────────────────────────────
+  const titleEl = $(el).find("h1,h2,h3,h4,h5").first();
+  if (titleEl.length) addField("title", titleEl.text().trim(), "text");
 
-    // 4. Latest / Featured section
-    const latestPatterns = [
-      "[class*='latest']","[class*='terbaru']","[class*='recent']","[class*='new']",
-      "[class*='featured']","[class*='trending']","[class*='popular']","[class*='populer']",
-      "#latest","#terbaru","#featured","#trending",
-    ];
-    for (const sel of latestPatterns) {
-      try {
-        const el = $(sel).first();
-        if (!el.length) continue;
-        const items = el.find("a[href]");
-        if (items.length >= 3) {
-          const samples = [];
-          items.slice(0, 5).each((_, a) => {
-            const txt = $(a).text().trim();
-            if (txt.length > 1) samples.push(txt.substring(0, 80));
-          });
-          elements.push({
-            category: "latest",
-            label: `Film/Video Terbaru (${items.length} item)`,
-            selector: sel,
-            preview: samples,
-            count: items.length,
-            target: `film/video terbaru: judul, URL detail, poster, tahun rilis`,
-            priority: 8,
-          });
-          break;
-        }
-      } catch {}
-    }
-
-    // 5. Search functionality
-    const searchInput = $("input[name*='search'],input[name*='s'],input[placeholder*='cari'],input[placeholder*='search'],input[type='search']").first();
-    if (searchInput.length) {
-      const formAction = searchInput.closest("form").attr("action") || "";
-      elements.push({
-        category: "search",
-        label: `Fungsi Pencarian`,
-        selector: "input[type='search'], form[role='search']",
-        preview: [`Form pencarian ditemukan${formAction ? ` — action: ${formAction}` : ""}`],
-        count: 1,
-        target: `scraper pencarian: kirim query ke form search, ambil hasil pencarian`,
-        priority: 6,
-      });
-    }
-
-    // 6. Video player / embed URL
-    const playerPatterns = [
-      "iframe[src*='player']","iframe[src*='embed']","iframe[src*='video']",
-      "[class*='player']","[class*='embed']","video[src]","video source[src]",
-      "[data-src*='player']","[data-embed]",
-    ];
-    for (const sel of playerPatterns) {
-      try {
-        const el = $(sel).first();
-        if (el.length) {
-          const src = el.attr("src") || el.attr("data-src") || "(embedded)";
-          elements.push({
-            category: "player",
-            label: `Video Player / Embed`,
-            selector: sel,
-            preview: [`Embed URL: ${src.substring(0, 100)}`],
-            count: 1,
-            target: `URL embed video player, source video, link streaming langsung`,
-            priority: 9,
-          });
-          break;
-        }
-      } catch {}
-    }
-
-    // 7. Film detail page detection
-    const synopsisPatterns = [
-      "[class*='synopsis'],[class*='sinopsis']","[class*='description'],[class*='deskripsi']",
-      "[class*='detail'] p","[class*='overview']",".entry-content p",
-    ];
-    for (const sel of synopsisPatterns) {
-      try {
-        const el = $(sel).first();
-        if (el.length && el.text().trim().length > 50) {
-          const detailFields = [];
-          const infoPatterns = ["[class*='genre']","[class*='year'],[class*='tahun']","[class*='director'],[class*='sutradara']",
-            "[class*='cast'],[class*='pemain']","[class*='rating'],[class*='imdb']","[class*='duration'],[class*='durasi']"];
-          infoPatterns.forEach(p => { try { if ($(p).length) detailFields.push(p); } catch {} });
-          elements.push({
-            category: "detail",
-            label: `Detail Film/Video`,
-            selector: "[class*='detail'],[class*='single'],[class*='post-content']",
-            preview: [
-              el.text().trim().substring(0, 120) + "…",
-              ...(detailFields.length ? [`Field: ${detailFields.slice(0,3).join(", ")}`] : []),
-            ],
-            count: 1,
-            target: `detail film lengkap: sinopsis, genre, tahun, sutradara, pemain, rating IMDB, durasi, poster`,
-            priority: 8,
-          });
-          break;
-        }
-      } catch {}
-    }
-
-  // ── ECOMMERCE SITE ──────────────────────────────────────────
-  } else if (siteType === "ecommerce") {
-    const cardPatterns = [
-      "[class*='product-item']","[class*='product-card']","[class*='product_item']",
-      "[class*='item-product']",".products li",".product-list li",
-      "[class*='grid'] [class*='product']","[class*='card']",
-    ];
-    const card = findCardSelector(cardPatterns);
-    if (card) {
-      const samples = [];
-      $(card.sel).slice(0, 5).each((_, el) => {
-        const name  = $(el).find("[class*='name'],[class*='title'],[class*='product-name']").first().text().trim();
-        const price = $(el).find("[class*='price'],[class*='harga']").first().text().trim();
-        const info  = [name, price].filter(Boolean).join(" — ");
-        if (info.length > 2) samples.push(info.substring(0, 100));
-      });
-      elements.push({
-        category: "products",
-        label: `Daftar Produk (${card.count} item)`,
-        selector: card.sel,
-        preview: samples.length ? samples : [`${card.count} produk ditemukan`],
-        count: card.count,
-        target: `daftar produk: nama produk, harga, rating, gambar, link detail`,
-        priority: 10,
-      });
-    }
-    // Price elements
-    const prices = [];
-    $("[class*='price'],[class*='harga']").slice(0, 8).each((_, el) => {
-      const txt = $(el).text().trim();
-      if (txt.length > 0 && txt.length < 50) prices.push(txt);
-    });
-    if (prices.length >= 2) {
-      elements.push({
-        category: "prices",
-        label: `Harga Produk (${prices.length} harga)`,
-        selector: "[class*='price'],[class*='harga']",
-        preview: prices.slice(0, 4),
-        count: prices.length,
-        target: `harga produk: harga normal, harga diskon, persentase diskon`,
-        priority: 9,
-      });
-    }
-    // Categories
-    const cats = [];
-    $("[class*='category'] a,[class*='kategori'] a,nav[class*='cat'] a").slice(0, 10).each((_, el) => {
-      const txt = $(el).text().trim();
-      if (txt.length > 1 && txt.length < 50) cats.push(txt);
-    });
-    if (cats.length >= 2) {
-      elements.push({
-        category: "categories",
-        label: `Kategori (${cats.length})`,
-        selector: "[class*='category'] a,[class*='kategori'] a",
-        preview: cats.slice(0, 5),
-        count: cats.length,
-        target: `daftar kategori produk dengan nama dan URL link`,
-        priority: 7,
-      });
-    }
-
-  // ── NEWS SITE ───────────────────────────────────────────────
-  } else if (siteType === "news") {
-    const cardPatterns = [
-      "article","[class*='article-item']","[class*='news-item']","[class*='post-item']",
-      "[class*='card-news']","[class*='news-card']",".list-news li",".articles li",
-    ];
-    const card = findCardSelector(cardPatterns);
-    if (card) {
-      const samples = [];
-      $(card.sel).slice(0, 5).each((_, el) => {
-        const title = $(el).find("h1,h2,h3,h4,[class*='title']").first().text().trim();
-        const date  = $(el).find("[class*='date'],[class*='time'],time").first().text().trim();
-        const info  = [title, date].filter(Boolean).join(" | ");
-        if (info.length > 2) samples.push(info.substring(0, 120));
-      });
-      elements.push({
-        category: "articles",
-        label: `Daftar Artikel (${card.count} artikel)`,
-        selector: card.sel,
-        preview: samples.length ? samples : [`${card.count} artikel ditemukan`],
-        count: card.count,
-        target: `daftar artikel/berita: judul, tanggal publish, penulis, kategori, link, thumbnail`,
-        priority: 10,
-      });
-    }
-    // Article detail
-    const content = $("article .content, .article-body, .post-content, [class*='article-content']").first();
-    if (content.length && content.text().trim().length > 100) {
-      elements.push({
-        category: "article_detail",
-        label: `Isi Artikel Lengkap`,
-        selector: "article, .article-body, .post-content",
-        preview: [content.text().trim().substring(0, 150) + "…"],
-        count: 1,
-        target: `detail artikel: judul, isi lengkap, penulis, tanggal, kategori, gambar`,
-        priority: 9,
-      });
-    }
-
-  // ── FORUM ───────────────────────────────────────────────────
-  } else if (siteType === "forum") {
-    const threadPatterns = [
-      "[class*='thread']","[class*='topic']","[class*='post']",
-      ".thread-list li",".forum-list li",
-    ];
-    const card = findCardSelector(threadPatterns);
-    if (card) {
-      const samples = [];
-      $(card.sel).slice(0, 5).each((_, el) => {
-        const txt = $(el).find("h1,h2,h3,[class*='title']").first().text().trim() ||
-                    $(el).text().replace(/\s+/g, " ").trim();
-        if (txt.length > 2) samples.push(txt.substring(0, 100));
-      });
-      elements.push({
-        category: "threads",
-        label: `Daftar Thread/Topik (${card.count})`,
-        selector: card.sel,
-        preview: samples,
-        count: card.count,
-        target: `daftar thread: judul topik, penulis, jumlah balasan, tanggal, link`,
-        priority: 10,
-      });
+  // ── Link utama ────────────────────────────────────────────
+  const linkEl = $(el).find("a[href]").first();
+  if (linkEl.length) {
+    const href = linkEl.attr("href") || "";
+    const absHref = href.startsWith("http") ? href : (baseUrl ? baseUrl.replace(/\/$/, "") + "/" + href.replace(/^\//, "") : href);
+    addField("link", absHref, "url");
+    // jika tidak ada h1-h5, gunakan teks link sebagai title
+    if (!fields.find(f => f.name === "title")) {
+      const linkTxt = linkEl.text().trim();
+      if (linkTxt.length > 2) addField("title", linkTxt, "text");
     }
   }
 
-  // ── UNIVERSAL ELEMENTS (semua site type) ─────────────────────
-  // Pagination
-  const pagePatterns = ["[class*='pagination']","[class*='paging']","[class*='page-nav']",
-    "nav[aria-label*='page']",".wp-pagenavi","[class*='nextpage']"];
-  for (const sel of pagePatterns) {
-    try {
-      if ($(sel).length) {
-        const links = $(sel).find("a").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 5);
-        elements.push({
-          category: "pagination",
-          label: `Pagination / Halaman Berikutnya`,
-          selector: sel,
-          preview: links.length ? links : ["Pagination ditemukan"],
-          count: $(sel).find("a").length,
-          target: `navigasi halaman: URL halaman berikutnya/sebelumnya untuk scraping multi-halaman`,
-          priority: 5,
-        });
-        break;
-      }
-    } catch {}
-  }
-
-  // Meta / SEO data (always useful)
-  const metas = [];
-  $("meta[name],meta[property]").each((_, el) => {
-    const name = $(el).attr("name") || $(el).attr("property") || "";
-    const content = $(el).attr("content") || "";
-    if (name && content && content.length > 2 && !name.includes("viewport") && !name.includes("charset")) {
-      metas.push(`${name}: ${content.substring(0, 80)}`);
+  // ── Gambar / Poster ───────────────────────────────────────
+  $(el).find("img").each((_, img) => {
+    const src = $(img).attr("src") || $(img).attr("data-src") || $(img).attr("data-lazy-src") ||
+                $(img).attr("data-original") || $(img).attr("data-lazy") || "";
+    if (src && !src.includes("data:") && src.length > 5) {
+      const absSrc = src.startsWith("http") ? src : (baseUrl ? baseUrl.replace(/\/$/, "") + "/" + src.replace(/^\//, "") : src);
+      addField("image", absSrc, "url");
+      return false; // hanya ambil pertama
     }
   });
-  if (metas.length) {
+
+  // ── Angka & Harga ─────────────────────────────────────────
+  const allTexts = $(el).find("*").map((_, c) => {
+    const txt = $(c).clone().children().remove().end().text().trim();
+    return { txt, tag: c.tagName, cls: $(c).attr("class") || "" };
+  }).get().filter(t => t.txt.length > 0);
+
+  allTexts.forEach(({ txt, tag, cls }) => {
+    const clsLow = cls.toLowerCase();
+    // Harga
+    if (/^(rp|idr|\$|€|¥|usd)?\s*[\d\.,]+\s*(rb|jt|k|m)?$/i.test(txt) || clsLow.includes("price") || clsLow.includes("harga") || clsLow.includes("cost")) {
+      addField("price", txt, "price");
+    }
+    // Rating / score
+    if (/^\d[\.,]\d$/.test(txt) || /\d+\/\d+/.test(txt) || clsLow.includes("rating") || clsLow.includes("score") || clsLow.includes("imdb") || clsLow.includes("star") || clsLow.includes("vote")) {
+      addField("rating", txt, "number");
+    }
+    // Tahun
+    if (/^(19|20)\d{2}$/.test(txt) || clsLow.includes("year") || clsLow.includes("tahun")) {
+      addField("year", txt, "number");
+    }
+    // Genre
+    if (clsLow.includes("genre") || clsLow.includes("kategori") || clsLow.includes("category") || clsLow.includes("tag")) {
+      addField("genre", txt, "text");
+    }
+    // Kualitas / resolusi
+    if (/^(CAM|TS|HD|FHD|4K|BLURAY|WEB-?DL|HDCAM|480p|720p|1080p)$/i.test(txt) || clsLow.includes("quality") || clsLow.includes("res")) {
+      addField("quality", txt, "text");
+    }
+    // Durasi
+    if (/\d+\s*(min|menit|jam|hour|ep)/i.test(txt) || clsLow.includes("duration") || clsLow.includes("durasi")) {
+      addField("duration", txt, "text");
+    }
+    // Tanggal
+    if (/\d{4}-\d{2}-\d{2}|\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|januari|februari)/i.test(txt) || clsLow.includes("date") || clsLow.includes("tanggal") || tag === "time") {
+      addField("date", txt, "text");
+    }
+    // Badge / status
+    if ((clsLow.includes("badge") || clsLow.includes("label") || clsLow.includes("status")) && txt.length < 30) {
+      addField("badge", txt, "text");
+    }
+  });
+
+  // ── alt text gambar sebagai fallback title ─────────────────
+  if (!fields.find(f => f.name === "title")) {
+    const alt = $(el).find("img[alt]").first().attr("alt") || "";
+    if (alt.length > 2) addField("title", alt, "text");
+  }
+
+  // ── Semua teks pendek yang belum dikategorikan ─────────────
+  allTexts.forEach(({ txt }) => {
+    if (txt.length > 2 && txt.length < 80 && !seen.has(txt.substring(0, 40))) {
+      const existing = fields.find(f => f.name === "title" || f.name === "link");
+      if (existing && fields.length >= 2) return; // cukup kalau sudah ada title+link
+      addField("info", txt, "text");
+    }
+  });
+
+  return fields;
+}
+
+/**
+ * Temukan grup elemen berulang dengan struktur paling konsisten
+ * Algoritma: grouping by tag + class signature, lalu score setiap grup
+ */
+function findRepeatingGroups($, minCount = 3, maxGroups = 8) {
+  const sigMap = {};
+
+  $("li, article, div, tr").each((_, el) => {
+    const tag      = el.tagName;
+    const cls      = ($(el).attr("class") || "").split(/\s+/).filter(c => c.length > 1 && c.length < 50 && !/^[0-9]/.test(c));
+    if (cls.length === 0) return;
+
+    const sig      = `${tag}.${cls.slice(0, 2).sort().join(".")}`;
+    const children = $(el).children().length;
+    const txtLen   = $(el).text().trim().length;
+
+    // Filter: jangan ambil elemen terlalu kecil atau terlalu besar
+    if (children < 1 || txtLen < 5 || txtLen > 8000) return;
+    // Jangan ambil elemen navigasi / footer / header
+    const parent  = $(el).closest("nav, header, footer, [class*='nav'], [class*='menu'], [class*='sidebar']");
+    if (parent.length) return;
+
+    if (!sigMap[sig]) sigMap[sig] = { sig, els: [], score: 0 };
+    sigMap[sig].els.push(el);
+  });
+
+  // Score setiap grup: lebih banyak elemen & lebih kaya konten = lebih tinggi
+  const groups = Object.values(sigMap)
+    .filter(g => g.els.length >= minCount)
+    .map(g => {
+      const sample  = g.els.slice(0, 3);
+      const avgScore = sample.reduce((s, el) => s + scoreElement(el, $), 0) / sample.length;
+      const hasImg   = sample.some(el => $(el).find("img").length > 0);
+      const hasLink  = sample.some(el => $(el).find("a[href]").length > 0);
+      g.score = g.els.length * 0.3 + avgScore * 2 + (hasImg ? 5 : 0) + (hasLink ? 3 : 0);
+      return g;
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxGroups);
+
+  return groups;
+}
+
+/**
+ * Engine utama: deep DOM analysis
+ */
+function detectSmartElements(url, $, htmlRaw, siteType) {
+  const elements = [];
+  const baseUrl  = (() => { try { const u = new URL(url); return `${u.protocol}//${u.hostname}`; } catch { return ""; } })();
+
+  // ── 1. JSON-LD structured data (paling akurat) ────────────
+  const jsonLdItems = [];
+  $("script[type='application/ld+json']").each((_, el) => {
+    try {
+      const obj = JSON.parse($(el).text().trim());
+      const type = obj["@type"] || (Array.isArray(obj) ? obj[0]?.["@type"] : null) || "Unknown";
+      const name = obj.name || obj.headline || obj.title || "";
+      jsonLdItems.push({ type, name });
+    } catch {}
+  });
+  if (jsonLdItems.length) {
+    const types = [...new Set(jsonLdItems.map(j => j.type))];
+    const names = jsonLdItems.slice(0, 3).map(j => j.name).filter(Boolean);
+    elements.push({
+      category: "structured",
+      label:    `JSON-LD: ${types.join(", ")} (${jsonLdItems.length} item)`,
+      selector: "script[type='application/ld+json']",
+      preview:  names.length ? names : types,
+      count:    jsonLdItems.length,
+      target:   `JSON-LD structured data: ${types.join(", ")} — ambil semua field: name, url, image, description, price, datePublished, dll`,
+      priority: 10,
+      fields:   types.map(t => ({ name: "@type", value: t, type: "text" })),
+    });
+  }
+
+  // ── 2. Deep DOM: temukan grup elemen berulang ─────────────
+  const groups = findRepeatingGroups($);
+
+  groups.forEach((group, groupIdx) => {
+    if (!group.els.length) return;
+
+    // Ekstrak field dari beberapa sampel card
+    const sampleEls  = group.els.slice(0, 5);
+    const allFields  = sampleEls.map(el => extractCardFields(el, $, baseUrl));
+
+    // Kumpulkan nama field yang konsisten (muncul di >= 50% sampel)
+    const fieldCounts = {};
+    allFields.forEach(fs => fs.forEach(f => { fieldCounts[f.name] = (fieldCounts[f.name] || 0) + 1; }));
+    const consistentFields = Object.keys(fieldCounts).filter(fn => fieldCounts[fn] >= Math.ceil(sampleEls.length * 0.4));
+
+    if (consistentFields.length === 0 && !group.els[0]) return;
+
+    // Ambil preview dari sample pertama
+    const firstFields  = allFields[0] || [];
+    const previewLines = [];
+
+    // Buat preview yang informatif
+    const titleField = firstFields.find(f => f.name === "title");
+    const linkField  = firstFields.find(f => f.name === "link");
+    const imgField   = firstFields.find(f => f.name === "image");
+    const priceField = firstFields.find(f => f.name === "price");
+    const ratingField= firstFields.find(f => f.name === "rating");
+    const yearField  = firstFields.find(f => f.name === "year");
+    const qualField  = firstFields.find(f => f.name === "quality");
+    const dateField  = firstFields.find(f => f.name === "date");
+
+    if (titleField)  previewLines.push(`📌 ${titleField.value}`);
+    if (priceField)  previewLines.push(`💰 ${priceField.value}`);
+    if (ratingField) previewLines.push(`⭐ ${ratingField.value}`);
+    if (yearField)   previewLines.push(`📅 ${yearField.value}`);
+    if (qualField)   previewLines.push(`📺 ${qualField.value}`);
+    if (dateField)   previewLines.push(`📅 ${dateField.value}`);
+    if (imgField)    previewLines.push(`🖼️ ${imgField.value.substring(0, 80)}`);
+    if (linkField)   previewLines.push(`🔗 ${linkField.value.substring(0, 80)}`);
+
+    // Tambah preview dari sample ke-2 dan ke-3
+    [allFields[1], allFields[2]].forEach(fs => {
+      if (!fs) return;
+      const t = fs.find(f => f.name === "title");
+      const p = fs.find(f => f.name === "price");
+      if (t) previewLines.push(`📌 ${t.value}`);
+      if (p && p.name !== priceField?.name) previewLines.push(`💰 ${p.value}`);
+    });
+
+    // Tentukan label berdasarkan field yang ditemukan
+    const fieldNames = consistentFields;
+    let cardType = "Item";
+    if (fieldNames.includes("quality") || fieldNames.includes("rating")) {
+      cardType = siteType === "streaming" ? "Film/Video" : "Media";
+    } else if (fieldNames.includes("price")) {
+      cardType = "Produk";
+    } else if (fieldNames.includes("date")) {
+      cardType = "Artikel/Post";
+    } else if (titleField && linkField) {
+      cardType = "Card";
+    }
+
+    const sel = makeSelector(group.els[0], $);
+
+    // Bangun target string yang informatif
+    const fieldList = consistentFields.join(", ");
+    const targetStr = `${group.els.length} ${cardType} — field: ${fieldList || "title, link, image"} — selector: ${sel}`;
+
+    elements.push({
+      category:  cardType.toLowerCase().replace("/", "_"),
+      label:     `${cardType} List (${group.els.length} item) — ${consistentFields.slice(0, 4).join(", ")}`,
+      selector:  sel,
+      preview:   previewLines.slice(0, 6),
+      count:     group.els.length,
+      target:    targetStr,
+      priority:  Math.round(group.score),
+      fields:    firstFields,
+      rawFields: consistentFields,
+    });
+  });
+
+  // ── 3. Search form / input ────────────────────────────────
+  const searchForms = $("form").filter((_, form) => {
+    const hasSearch = $(form).find("input[type='search'], input[name*='search'], input[name='s'], input[name='q'], input[placeholder*='cari'], input[placeholder*='search']").length > 0;
+    return hasSearch;
+  });
+  if (searchForms.length) {
+    const action  = searchForms.first().attr("action") || "";
+    const method  = (searchForms.first().attr("method") || "GET").toUpperCase();
+    const inputName = searchForms.first().find("input[type='search'], input[name*='search'], input[name='s'], input[name='q']").first().attr("name") || "q";
+    elements.push({
+      category: "search_form",
+      label:    `Form Pencarian`,
+      selector: `form[action="${action}"]`,
+      preview:  [
+        `Action: ${action || "(same page)"}`,
+        `Method: ${method}`,
+        `Input param: ${inputName}`,
+      ],
+      count:    searchForms.length,
+      target:   `form pencarian: kirim keyword ke ${action || "URL saat ini"} dengan param ${inputName}, scrape semua hasil`,
+      priority: 7,
+    });
+  }
+
+  // ── 4. Navigasi / Menu links (genre, kategori, dll) ───────
+  const navGroups = {};
+  $("nav a[href], [class*='menu'] a[href], [class*='genre'] a[href], [class*='cat'] a[href], [class*='nav'] a[href]").each((_, a) => {
+    const href   = $(a).attr("href") || "";
+    const txt    = $(a).text().trim();
+    const parent = $(a).closest("nav, [class*='menu'], [class*='genre'], [class*='cat'], [class*='nav']");
+    if (!txt || txt.length < 1 || txt.length > 60 || !parent.length) return;
+    const parentSig = makeSelector(parent[0], $);
+    if (!navGroups[parentSig]) navGroups[parentSig] = { sel: parentSig, items: [] };
+    navGroups[parentSig].items.push({ txt, href });
+  });
+
+  Object.values(navGroups).forEach(nav => {
+    if (nav.items.length < 3) return;
+    const uniqueItems = [...new Map(nav.items.map(i => [i.txt, i])).values()];
+    if (uniqueItems.length < 3) return;
+    elements.push({
+      category: "navigation",
+      label:    `Navigasi: ${uniqueItems.slice(0, 3).map(i => i.txt).join(", ")}... (${uniqueItems.length})`,
+      selector: `${nav.sel} a`,
+      preview:  uniqueItems.slice(0, 5).map(i => `${i.txt} → ${i.href}`),
+      count:    uniqueItems.length,
+      target:   `navigasi/menu: ${uniqueItems.map(i => i.txt).slice(0, 6).join(", ")} — nama dan URL tiap link`,
+      priority: 5,
+    });
+  });
+
+  // ── 5. Tabel HTML ─────────────────────────────────────────
+  $("table").each((ti, tbl) => {
+    const headers = $(tbl).find("tr:first-child th, thead th").map((_, th) => $(th).text().trim()).get().filter(Boolean);
+    const rows    = $(tbl).find("tbody tr").length || $(tbl).find("tr").length - 1;
+    if (rows < 2) return;
+    const sampleRow = [];
+    $(tbl).find("tbody tr, tr").slice(1, 3).each((_, tr) => {
+      const cells = $(tr).find("td").map((_, td) => $(td).text().trim()).get().filter(Boolean);
+      if (cells.length) sampleRow.push(cells.slice(0, 4).join(" | "));
+    });
+    elements.push({
+      category: "table",
+      label:    `Tabel: ${headers.slice(0, 4).join(", ") || "(no header)"} (${rows} baris)`,
+      selector: `table:nth-of-type(${ti + 1})`,
+      preview:  [headers.length ? `Kolom: ${headers.join(", ")}` : "(no header)", ...sampleRow.slice(0, 2)],
+      count:    rows,
+      target:   `tabel data: ${headers.length ? headers.join(", ") : "semua kolom"} — ${rows} baris data`,
+      priority: 6,
+    });
+  });
+
+  // ── 6. Pagination ─────────────────────────────────────────
+  const paginationEl = $("a[href*='page'], a[href*='hal='], a[rel='next'], a[class*='next'], [class*='pagination'] a, [class*='paging'] a, [class*='page-numbers'] a").filter((_, a) => {
+    const txt = $(a).text().trim();
+    return txt && (txt.match(/^\d+$/) || /next|selanjutnya|»|›/i.test(txt));
+  });
+  if (paginationEl.length) {
+    const pageLinks = paginationEl.map((_, a) => `${$(a).text().trim()} → ${$(a).attr("href") || ""}`).get().slice(0, 4);
+    const nextHref  = $("a[rel='next']").first().attr("href") || paginationEl.last().attr("href") || "";
+    elements.push({
+      category: "pagination",
+      label:    `Pagination (${paginationEl.length} link halaman)`,
+      selector: "a[rel='next'], [class*='pagination'] a",
+      preview:  [...pageLinks, nextHref ? `Next URL: ${nextHref}` : ""].filter(Boolean),
+      count:    paginationEl.length,
+      target:   `multi-halaman: ikuti link "${nextHref || "halaman berikutnya"}" untuk scraping semua halaman`,
+      priority: 4,
+    });
+  }
+
+  // ── 7. Meta / OG tags ─────────────────────────────────────
+  const metaData = [];
+  $("meta[name], meta[property]").each((_, el) => {
+    const name = $(el).attr("name") || $(el).attr("property") || "";
+    const content = $(el).attr("content") || "";
+    if (!name || !content || content.length < 3) return;
+    if (/viewport|charset|robots|generator|author|theme/i.test(name)) return;
+    metaData.push(`${name}: ${content.substring(0, 80)}`);
+  });
+  if (metaData.length) {
     elements.push({
       category: "meta",
-      label: `Meta / SEO Data (${metas.length} tag)`,
-      selector: "meta",
-      preview: metas.slice(0, 4),
-      count: metas.length,
-      target: `meta tags: og:title, og:image, og:description, keywords untuk SEO data`,
+      label:    `Meta/OG Tags (${metaData.length} tag)`,
+      selector: "meta[name], meta[property]",
+      preview:  metaData.slice(0, 5),
+      count:    metaData.length,
+      target:   `meta tags: og:title, og:image, og:description, og:url, keywords — ideal untuk SEO data`,
       priority: 3,
     });
   }
 
-  // JSON-LD structured data
-  const jsonLds = [];
-  $("script[type='application/ld+json']").each((_, el) => {
-    try {
-      const obj = JSON.parse($(el).text().trim());
-      jsonLds.push(obj["@type"] || "Unknown");
-    } catch {}
-  });
-  if (jsonLds.length) {
-    elements.push({
-      category: "structured",
-      label: `JSON-LD Structured Data (${jsonLds.length})`,
-      selector: "script[type='application/ld+json']",
-      preview: jsonLds,
-      count: jsonLds.length,
-      target: `JSON-LD: ${jsonLds.join(", ")} — data terstruktur berkualitas tinggi`,
-      priority: 8,
+  // Sort by priority desc, remove duplicates by category (keep highest score per category)
+  const seen = new Set();
+  const result = elements
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    .filter(e => {
+      const key = e.category + "::" + e.selector;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
-  }
 
-  // Sort by priority descending
-  elements.sort((a, b) => (b.priority || 0) - (a.priority || 0));
-  return elements;
+  return result;
 }
 
-// ══════════════════════════════════════════════════════════════
-//  SMART SCRAPER SUGGESTIONS — per site type
-// ══════════════════════════════════════════════════════════════
+/**
+ * Build smart suggestions dari deep DOM analysis result
+ */
 function getScraperSuggestions(siteType, elements) {
-  const byCategory = {};
-  elements.forEach(e => { byCategory[e.category] = e; });
+  const suggestions = [];
 
-  const suggestions = {
+  // Dari elemen yang ditemukan (paling akurat)
+  elements.forEach(el => {
+    if (el.category === "structured") {
+      suggestions.push({
+        label: `🗄️ ${el.label}`,
+        desc:  `Ekstrak JSON-LD ${el.preview.slice(0, 2).join(", ")} — data terstruktur paling akurat dan reliable`,
+      });
+    } else if (["film_video", "produk", "artikel_post", "card", "media", "item"].includes(el.category)) {
+      const fields = el.rawFields || [];
+      const fieldStr = fields.slice(0, 5).join(", ");
+      suggestions.push({
+        label: `📦 ${el.label}`,
+        desc:  `Scrape ${el.count} item — field: ${fieldStr || "title, link, image"} — gunakan selector: ${el.selector}`,
+      });
+    } else if (el.category === "search_form") {
+      suggestions.push({
+        label: `🔍 Scraper Pencarian`,
+        desc:  `${el.target}`,
+      });
+    } else if (el.category === "pagination") {
+      suggestions.push({
+        label: `📄 Scrape Semua Halaman (Auto-Pagination)`,
+        desc:  `Ikuti semua halaman secara otomatis — ${el.target}`,
+      });
+    }
+  });
+
+  // Tambah suggestions kontekstual berdasarkan siteType
+  const contextual = {
     streaming: [
-      { label: "🎬 Daftar Film/Video Terbaru", desc: "Scrape semua film di halaman utama: judul, poster, tahun, genre, rating, link detail" },
-      { label: "🎭 Detail Film Lengkap", desc: "Scrape halaman detail film: sinopsis, genre, tahun, sutradara, pemain, rating IMDB, embed URL" },
-      { label: "📺 Daftar Episode Serial", desc: "Scrape semua episode dari halaman series: nomor episode, judul, link streaming" },
-      { label: "🔍 Hasil Pencarian Film", desc: "Scrape hasil search query tertentu: daftar film yang cocok dengan keyword" },
-      { label: "🏷️ Film Berdasarkan Genre", desc: "Scrape daftar film per genre/kategori dengan paginasi" },
-      { label: "📄 Multi-halaman (All Pages)", desc: "Scrape semua halaman dengan auto-follow pagination, kumpulkan semua film" },
+      { label: "🎬 Daftar Film + Poster + Rating", desc: "Scrape semua film: judul, URL poster, tahun, rating, genre, link detail — dengan auto-pagination" },
+      { label: "📺 Episode & Link Streaming", desc: "Dari halaman detail film/series: ambil semua episode beserta link nonton langsung" },
+      { label: "🎭 Info Lengkap per Film", desc: "Detail film: sinopsis, pemain, sutradara, tahun, genre, durasi, rating IMDB, embed player URL" },
     ],
     ecommerce: [
-      { label: "🛍️ Daftar Produk Terbaru", desc: "Scrape semua produk: nama, harga, rating, gambar, link detail" },
-      { label: "💰 Harga & Diskon Produk", desc: "Pantau harga produk tertentu, deteksi perubahan harga dan diskon" },
-      { label: "⭐ Review & Rating Produk", desc: "Scrape semua review: bintang, komentar, nama pembeli, tanggal" },
-      { label: "📦 Detail Produk Lengkap", desc: "Scrape halaman detail: nama, deskripsi, spesifikasi, harga, stok, gambar" },
-      { label: "🗂️ Kategori & Sub-kategori", desc: "Scrape struktur navigasi kategori produk" },
-      { label: "📄 Multi-halaman (All Pages)", desc: "Scrape semua halaman produk dengan auto-pagination" },
+      { label: "🛍️ Produk + Harga + Rating", desc: "Scrape semua produk: nama, harga normal, harga diskon, rating bintang, jumlah review, URL gambar" },
+      { label: "⭐ Review & Komentar Pembeli", desc: "Dari halaman produk: ambil semua review dengan bintang, teks, nama pembeli, tanggal" },
     ],
     news: [
-      { label: "📰 Artikel Terbaru / Headline", desc: "Scrape daftar berita terbaru: judul, penulis, tanggal, thumbnail, link" },
-      { label: "📝 Isi Artikel Lengkap", desc: "Scrape konten penuh artikel: judul, isi, penulis, tanggal, tags, gambar" },
-      { label: "🏷️ Berita per Kategori", desc: "Scrape berita dari kategori tertentu dengan paginasi" },
-      { label: "📄 Multi-halaman (All Pages)", desc: "Kumpulkan semua artikel dari banyak halaman" },
+      { label: "📰 Berita + Tanggal + Penulis", desc: "Scrape daftar berita: judul, tanggal terbit, nama penulis, thumbnail, link artikel" },
+      { label: "📝 Isi Artikel Lengkap", desc: "Buka tiap artikel dan scrape: judul, paragraf lengkap, gambar, tags, tanggal" },
     ],
     forum: [
-      { label: "💬 Daftar Thread/Topik", desc: "Scrape daftar thread: judul, penulis, jumlah balasan, tanggal, views" },
-      { label: "📖 Isi Thread + Semua Balasan", desc: "Scrape konten thread lengkap: OP + semua reply" },
-      { label: "👤 Profil User", desc: "Scrape profil pengguna: username, join date, post count" },
-    ],
-    jobs: [
-      { label: "💼 Lowongan Kerja Terbaru", desc: "Scrape semua lowongan: posisi, perusahaan, lokasi, gaji, link apply" },
-      { label: "🏢 Detail Lowongan", desc: "Scrape detail loker: deskripsi, kualifikasi, benefit, cara daftar" },
-    ],
-    social: [
-      { label: "📸 Posts / Feed Terbaru", desc: "Scrape daftar post terbaru dari feed atau profil" },
-      { label: "👥 Data Profil", desc: "Scrape info profil: nama, bio, followers, following, jumlah post" },
-    ],
-    general: [
-      { label: "📋 Konten Utama Halaman", desc: "Scrape elemen utama halaman: heading, paragraf, link, gambar" },
-      { label: "🔗 Semua Link & URL", desc: "Ekstrak semua link dari halaman untuk crawling/sitemap" },
-      { label: "🖼️ Semua Gambar", desc: "Kumpulkan semua URL gambar beserta alt text" },
-      { label: "📊 Data Tabel", desc: "Ekstrak data dari tabel HTML" },
+      { label: "💬 Thread + Reply + Views", desc: "Scrape daftar thread: judul, jumlah reply, views, nama OP, tanggal" },
     ],
   };
 
-  return (suggestions[siteType] || suggestions.general).slice(0, 6);
+  (contextual[siteType] || []).forEach(s => {
+    if (!suggestions.some(x => x.label === s.label)) suggestions.push(s);
+  });
+
+  // Universal fallbacks
+  if (!suggestions.some(s => s.label.includes("Pagination"))) {
+    suggestions.push({
+      label: "📄 Scrape Semua Halaman",
+      desc:  "Auto-follow pagination: scrape dari halaman 1 sampai halaman terakhir, kumpulkan semua data",
+    });
+  }
+
+  return suggestions.slice(0, 8);
 }
 
 
@@ -2314,58 +2348,74 @@ ${bCF ? "PENTING: Gunakan cURL dengan full browser headers, rotate User-Agent, s
     const siteContext = siteType ? `\nTipe website: ${siteType}` : "";
     const pageContext = req.query.pageType ? `\nTipe halaman: ${req.query.pageType}` : "";
     const searchCtx  = req.query.searchQuery ? `\nQuery pencarian: "${req.query.searchQuery}"` : "";
-    const selectorContext = selectors ? (() => {
+
+    // Parse deep DOM data dari selectors param
+    let domDataContext = "";
+    let bestSelector = "";
+    let foundFields = [];
+    if (selectors) {
       try {
         const parsed = JSON.parse(selectors);
         if (Array.isArray(parsed) && parsed.length) {
-          return "\nCSS Selectors dari HTML asli:\n" + parsed.map(s => `  ${s.category}: ${s.selector}`).join("\n");
+          const best = parsed[0]; // sudah diurutkan by priority
+          bestSelector = best.selector || "";
+          foundFields  = best.fields || [];
+          const fieldStr = foundFields.slice(0, 8).map(f => `  - ${f.name}: "${f.value?.substring(0, 60) || ""}"`).join("\n");
+          domDataContext = `
+=== DATA NYATA DARI HTML (DEEP DOM ANALYSIS) ===
+Selector card utama: ${bestSelector}
+Jumlah item ditemukan: ${best.count || "?"}
+Field yang ditemukan di setiap card:
+${fieldStr || "  (tidak ada)"}
+${parsed.slice(1, 4).map(g => `\nGrup lain: selector="${g.selector}" count=${g.count} fields=${(g.rawFields||[]).join(",")}`).join("")}`;
         }
       } catch {}
-      return "";
-    })() : "";
+    }
 
     const siteSpecificGuide = {
       streaming: `\nPanduan site streaming:
-- Untuk daftar film: cari elemen kartu/item yang berulang (li, article, div.item)
-- Ambil: judul film, URL poster (src/data-src dari img), tahun, genre, rating, link detail
-- Untuk episode: ikuti link ke halaman detail, ekstrak daftar episode
-- Handle pagination: cari link "Next Page" atau nomor halaman
-- Untuk embed URL video: cari iframe[src*='embed'] atau script dengan URL video`,
+- Gunakan selector card: ${bestSelector || "li, article, .item"} untuk loop setiap film
+- Field per card: title (teks heading), image (img src/data-src), link (href), rating (teks angka), year (4 digit)
+- Untuk poster: coba semua atribut img: src, data-src, data-lazy, data-original
+- Untuk episode: ikuti link detail, cari list episode
+- Handle pagination: cari a[rel=next] atau link "Next/Selanjutnya"
+- Untuk embed player: cari iframe src, atau script dengan URL video`,
       ecommerce: `\nPanduan site ecommerce:
-- Ambil semua kartu produk: nama, harga (normal + diskon), rating, stok, gambar, link
-- Handle harga format: strip simbol mata uang, parse angka
+- Gunakan selector: ${bestSelector || "li, .item, article"} untuk loop setiap produk
+- Field per produk: nama (heading), harga (teks rupiah/angka), rating, gambar (img src)
+- Handle harga: hapus "Rp", ".", "," lalu parse ke float
 - Ikuti pagination untuk halaman berikutnya`,
       news: `\nPanduan site berita:
-- Ambil daftar artikel: judul, tanggal, penulis, kategori, thumbnail, link
-- Untuk isi lengkap: ikuti link artikel, ambil konten dari elemen artikel/content
-- Handle berbagai format tanggal Indonesia`,
+- Gunakan selector: ${bestSelector || "article, .item"} untuk loop artikel
+- Field: judul, tanggal/time, penulis, thumbnail, link
+- Untuk isi lengkap: buka tiap link, ambil paragraf dari article/content`,
     };
 
     const prompt = `URL Target: ${url}
 Yang akan di-scrape: ${target}
-Bahasa: ${lang}${siteContext}${pageContext}${searchCtx}${selectorContext}
+Bahasa: ${lang}${siteContext}${pageContext}${searchCtx}
 ${bCF ? "Mode Bypass Cloudflare: AKTIF — wajib gunakan semua teknik stealth bypass" : ""}
+${domDataContext}
 ${(siteSpecificGuide[siteType] || "")}
 
-Tugas: Buat scraper PRODUCTION-READY yang benar-benar bisa dijalankan untuk mengambil: ${target}
+Tugas: Buat scraper PRODUCTION-READY untuk mengambil: ${target}
 
 Struktur wajib:
 1. Import/require semua library
-2. Konfigurasi (BASE_URL, headers lengkap seperti browser asli, timeout, retry)
-3. Fungsi fetchPage(url) dengan retry logic (3x) dan random delay
-4. Fungsi parseData($, html) — ekstrak data target dengan selector yang tepat
-5. Fungsi main() yang:
-   - Fetch halaman
-   - Parse data
-   - Handle pagination jika ada (ambil semua halaman)
-   - Return array hasil
-6. Output: console.log(JSON.stringify(result, null, 2))
-7. Error handling di setiap fungsi
+2. Konfigurasi: BASE_URL="${url}", headers lengkap seperti browser (User-Agent Chrome, Accept, dll)
+3. Fungsi fetchPage(url) — HTTP GET dengan retry 3x, random delay 1-2s, return HTML string
+4. Fungsi parseItems(html) — gunakan selector "${bestSelector || "li, article"}" untuk loop tiap card, extract field: ${foundFields.slice(0,5).map(f=>f.name).join(", ") || "title, link, image, rating"}
+5. Fungsi main():
+   - Loop semua halaman (ikuti pagination)
+   - Kumpulkan semua data ke array
+   - Return JSON array
+6. console.log(JSON.stringify(result, null, 2))
+7. Try/catch + error handling lengkap
 
-PENTING: 
-- Gunakan selector CSS spesifik dari konteks di atas, bukan selector generic
-- Tulis SEMUA kode dari awal sampai akhir, JANGAN potong
-- Kode harus bisa langsung dijalankan tanpa modifikasi`;
+PENTING:
+- GUNAKAN selector nyata dari data di atas, bukan asumsi
+- Tulis SEMUA kode lengkap, jangan potong
+- Kode langsung bisa dijalankan tanpa modifikasi apapun`;
 
     const code = await (async () => {
       const raw = await callAI({ provider, apiKey, model, system: sysMap[lang], prompt, maxTokens: null });
