@@ -1,7 +1,7 @@
 node_modules
-npm-debug.log
+client/node_modules
+client/dist
 .env
-.git
-.gitignore
-*.md
-!README.md
+data
+*.log
+.DS_Store

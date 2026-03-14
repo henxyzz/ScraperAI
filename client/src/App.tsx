@@ -1,0 +1,97 @@
+import { Zap, Code2, Wrench, BookOpen, Terminal } from "lucide-react";
+import { useStore } from "./store";
+import { ProviderBar } from "./components/ProviderBar";
+import { GeneratorView } from "./components/GeneratorView";
+import { ScrapersView } from "./components/ScrapersView";
+import { FixEngineView } from "./components/FixEngineView";
+import { DocsView } from "./components/DocsView";
+import { ToastContainer } from "./components/Toast";
+import type { View } from "./types";
+
+interface NavItem {
+  id:    View;
+  label: string;
+  Icon:  React.FC<{ size?: number }>;
+}
+
+const NAV_ITEMS: NavItem[] = [
+  { id: "generator", label: "Generator",    Icon: Zap },
+  { id: "scrapers",  label: "Scrapers",     Icon: Code2 },
+  { id: "fix",       label: "Fix Engine",   Icon: Wrench },
+  { id: "docs",      label: "API Docs",     Icon: BookOpen },
+];
+
+const VIEW_TITLES: Record<View, string> = {
+  generator: "Scraper Generator",
+  scrapers:  "Scraper Library",
+  fix:       "AI Fix Engine",
+  docs:      "API Documentation",
+};
+
+export default function App() {
+  const { activeView, setView } = useStore();
+
+  return (
+    <>
+      {/* Background effects */}
+      <div className="bg-grid" />
+      <div className="bg-orb bg-orb1" />
+      <div className="bg-orb bg-orb2" />
+
+      <div className="app-shell">
+        {/* Sidebar */}
+        <aside className="sidebar">
+          <div className="sidebar-logo">
+            <div className="sidebar-logo-mark">
+              <span className="logo-ai">Smart</span>
+              <span className="logo-scrape">Scrape</span>
+              <span className="logo-ai">AI</span>
+            </div>
+            <div className="sidebar-ver">v3.0</div>
+          </div>
+
+          <nav className="sidebar-nav">
+            {NAV_ITEMS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                className={`nav-item ${activeView === id ? "active" : ""}`}
+                onClick={() => setView(id)}
+              >
+                <Icon size={16} />
+                <span className="nav-item-label">{label}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="sidebar-footer">
+            <div className="sidebar-version">henhendrazat © 2025</div>
+          </div>
+        </aside>
+
+        {/* Main */}
+        <main className="main-area">
+          {/* Topbar */}
+          <header className="topbar">
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Terminal size={15} style={{ color: "var(--neon)", opacity: .7 }} />
+              <span className="topbar-title">{VIEW_TITLES[activeView]}</span>
+            </div>
+            <div style={{ flex: 1 }} />
+            <ProviderBar />
+          </header>
+
+          {/* Content */}
+          <div className="content-area">
+            {activeView === "generator" && <GeneratorView />}
+            {activeView === "scrapers"  && <ScrapersView />}
+            {activeView === "fix"       && <FixEngineView />}
+            {activeView === "docs"      && <DocsView />}
+          </div>
+        </main>
+      </div>
+
+      {/* Toast notifications */}
+      <ToastContainer />
+    </>
+  );
+}
