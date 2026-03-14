@@ -1,0 +1,1770 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SmartScrapeAI v2.0 — AI-Powered Scraper Generator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@700;800;900&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+/* ════════════════════════════════════════════════════
+   RESET & VARS
+════════════════════════════════════════════════════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#05080e;--surface:#0c1219;--card:#0f1825;--cardB:#111e2c;
+  --border:#182437;--border2:#1f2f42;--border3:#263848;
+  --neon:#2effa8;--neon2:#00c2ff;--warn:#ffb830;--danger:#ff4560;--purple:#b06fff;
+  --text:#c8d8e8;--muted:#415870;--mono:'JetBrains Mono',monospace;
+  --head:'Syne',sans-serif;--body:'Manrope',sans-serif;
+}
+html,body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:100vh;font-size:14px;line-height:1.6}
+a{color:var(--neon2);text-decoration:none}
+button{cursor:pointer;font-family:var(--body)}
+input,select,textarea{font-family:var(--body)}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+
+/* ════ BG ════ */
+.bg-grid{position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:linear-gradient(rgba(46,255,168,.022) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(46,255,168,.022) 1px,transparent 1px);
+  background-size:44px 44px}
+.bg-orb{position:fixed;border-radius:50%;pointer-events:none;z-index:0}
+.bg-orb1{width:700px;height:700px;background:radial-gradient(circle,rgba(46,255,168,.05) 0%,transparent 65%);top:-250px;right:-200px}
+.bg-orb2{width:500px;height:500px;background:radial-gradient(circle,rgba(0,194,255,.04) 0%,transparent 65%);bottom:-100px;left:-150px}
+
+/* ════ LAYOUT ════ */
+.app{position:relative;z-index:1;max-width:960px;margin:0 auto;padding:36px 18px 80px}
+
+/* ════ HEADER ════ */
+.header{text-align:center;margin-bottom:44px}
+.badge-live{display:inline-flex;align-items:center;gap:8px;
+  background:rgba(46,255,168,.07);border:1px solid rgba(46,255,168,.22);
+  border-radius:100px;padding:6px 18px 6px 12px;
+  font-family:var(--mono);font-size:10px;letter-spacing:2.5px;
+  color:var(--neon);text-transform:uppercase;margin-bottom:20px}
+.ldot{width:7px;height:7px;border-radius:50%;background:var(--neon);
+  box-shadow:0 0 8px var(--neon);animation:blink 2s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.15}}
+.app-title{font-family:var(--head);font-size:clamp(30px,6vw,58px);font-weight:900;
+  line-height:1.05;letter-spacing:-1.5px;margin-bottom:14px}
+.tg{background:linear-gradient(90deg,var(--neon),var(--neon2));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.tw{color:#fff}
+.app-sub{font-size:14px;color:var(--muted);max-width:560px;margin:0 auto;line-height:1.85}
+.app-sub strong{color:var(--text)}
+
+/* ════ NAV TABS ════ */
+.nav-tabs{display:flex;gap:6px;margin-bottom:24px;
+  background:rgba(0,0,0,.3);border:1px solid var(--border);
+  border-radius:12px;padding:6px}
+.nav-tab{flex:1;padding:10px;border:none;background:transparent;
+  border-radius:8px;color:var(--muted);font-family:var(--mono);
+  font-size:11.5px;letter-spacing:.5px;transition:all .2s;text-align:center}
+.nav-tab:hover{color:var(--text)}
+.nav-tab.active{background:var(--card);color:var(--neon);
+  border:1px solid var(--border2);box-shadow:0 2px 12px rgba(0,0,0,.3)}
+
+/* ════ STEP BAR ════ */
+.stepbar{display:flex;align-items:center;margin-bottom:28px}
+.step-it{display:flex;align-items:center;gap:7px}
+.sc{width:28px;height:28px;border-radius:50%;border:1.5px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:11px;color:var(--muted);
+  flex-shrink:0;transition:all .3s ease}
+.step-it.sa .sc{border-color:var(--neon);color:var(--neon);box-shadow:0 0 14px rgba(46,255,168,.3)}
+.step-it.sd .sc{background:var(--neon);border-color:var(--neon);color:#050810;font-weight:700}
+.sl{font-family:var(--mono);font-size:10px;letter-spacing:.5px;
+  color:var(--muted);white-space:nowrap}
+.step-it.sa .sl{color:var(--neon)}.step-it.sd .sl{color:#ccc}
+.sline{flex:1;height:1px;background:var(--border2);margin:0 8px;
+  min-width:16px;max-width:50px;transition:all .3s}
+.step-it.sd+.sline{background:rgba(46,255,168,.4)}
+
+/* ════ CARD ════ */
+.card{background:var(--card);border:1px solid var(--border);
+  border-radius:14px;overflow:hidden;margin-bottom:16px;
+  position:relative;animation:slideUp .3s ease forwards}
+@keyframes slideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.card::before{content:'';position:absolute;top:0;left:15%;right:15%;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(46,255,168,.45),transparent)}
+.card-head{display:flex;align-items:center;gap:10px;
+  padding:12px 20px;border-bottom:1px solid var(--border);background:rgba(0,0,0,.25)}
+.ctag{font-family:var(--mono);font-size:10px;letter-spacing:2px;
+  color:var(--neon2);text-transform:uppercase}
+.cdots{display:flex;gap:6px;margin-left:auto}
+.cdots span{width:8px;height:8px;border-radius:50%;opacity:.6}
+.cdots span:nth-child(1){background:#ff5f56}
+.cdots span:nth-child(2){background:#febc2e}
+.cdots span:nth-child(3){background:#28c840}
+.card-body{padding:20px}
+
+/* ════ PROVIDER SELECTOR ════ */
+.provider-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:18px}
+.prov-btn{padding:10px 8px;background:rgba(0,0,0,.4);border:1.5px solid var(--border2);
+  border-radius:10px;color:var(--muted);font-family:var(--mono);font-size:11px;
+  transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:5px;text-align:center}
+.prov-btn:hover{border-color:var(--border3);color:var(--text)}
+.prov-btn.pact{background:rgba(46,255,168,.08);border-color:var(--neon);
+  color:var(--neon);box-shadow:0 0 14px rgba(46,255,168,.12)}
+.prov-ico{font-size:20px}
+.prov-name{font-size:11px;font-weight:600}
+.prov-model{font-size:9px;opacity:.45;font-family:var(--body);margin-top:1px}
+
+/* ════ INPUT ════ */
+.field-group{margin-bottom:14px}
+.field-label{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--muted);margin-bottom:6px;display:block}
+.inp{width:100%;background:rgba(0,0,0,.5);border:1px solid var(--border2);
+  border-radius:9px;padding:12px 14px;color:#e0efff;
+  font-family:var(--mono);font-size:13px;outline:none;
+  transition:border-color .2s,box-shadow .2s}
+.inp:focus{border-color:rgba(46,255,168,.5);box-shadow:0 0 0 3px rgba(46,255,168,.07)}
+.inp::placeholder{color:var(--muted)}
+.inp:disabled{opacity:.45;cursor:not-allowed}
+.inp.warn-inp:focus{border-color:rgba(255,184,48,.5)}
+
+.inp-row{display:flex;gap:10px}
+.inp-row .inp{flex:1}
+
+/* ════ BUTTONS ════ */
+.btn-primary{background:var(--neon);color:#050810;border:none;
+  border-radius:9px;padding:12px 22px;font-family:var(--head);
+  font-size:13px;font-weight:700;display:flex;align-items:center;
+  gap:8px;white-space:nowrap;transition:all .2s}
+.btn-primary:hover:not(:disabled){background:#fff;
+  box-shadow:0 0 28px rgba(46,255,168,.4);transform:translateY(-1px)}
+.btn-primary:disabled{opacity:.38;cursor:not-allowed;transform:none}
+
+.btn-ghost{background:transparent;border:1px solid var(--border2);
+  border-radius:9px;padding:10px 18px;color:var(--muted);
+  font-family:var(--mono);font-size:11.5px;transition:all .15s}
+.btn-ghost:hover:not(:disabled){border-color:var(--neon2);color:var(--neon2)}
+.btn-ghost:disabled{opacity:.35;cursor:not-allowed}
+
+.btn-warn{background:rgba(255,184,48,.1);border:1px solid rgba(255,184,48,.35);
+  border-radius:9px;padding:12px 18px;color:var(--warn);
+  font-family:var(--head);font-size:13px;font-weight:700;transition:all .15s;flex:1}
+.btn-warn:hover{background:rgba(255,184,48,.2);border-color:var(--warn)}
+
+.btn-danger{background:rgba(255,69,96,.07);border:1px solid rgba(255,69,96,.25);
+  border-radius:9px;padding:12px 18px;color:var(--danger);
+  font-family:var(--head);font-size:13px;font-weight:700;transition:all .15s;flex:1}
+.btn-danger:hover{background:rgba(255,69,96,.15);border-color:var(--danger)}
+
+.btn-full{width:100%;justify-content:center;margin-top:14px;padding:14px}
+
+/* ════ CHAT ════ */
+.chat-scroll{display:flex;flex-direction:column;gap:13px;
+  max-height:360px;overflow-y:auto;padding-right:4px;margin-bottom:0}
+.cmsg{display:flex;gap:11px;animation:msgIn .25s ease}
+@keyframes msgIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.cava{width:34px;height:34px;border-radius:8px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:16px}
+.cava.ai   {background:rgba(46,255,168,.1); border:1px solid rgba(46,255,168,.2)}
+.cava.user {background:rgba(0,194,255,.1);  border:1px solid rgba(0,194,255,.2)}
+.cava.warn {background:rgba(255,184,48,.1); border:1px solid rgba(255,184,48,.25)}
+.cbub{background:rgba(0,0,0,.3);border:1px solid var(--border);
+  border-radius:12px;padding:11px 15px;flex:1;font-size:13.5px;line-height:1.75}
+.cbub.ai  {border-color:rgba(46,255,168,.13)}
+.cbub.user{border-color:rgba(0,194,255,.13)}
+.cbub.warn{border-color:rgba(255,184,48,.2);background:rgba(255,184,48,.04)}
+.cwho{font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;
+  text-transform:uppercase;margin-bottom:5px;opacity:.5}
+.cwho.ai  {color:var(--neon)}.cwho.user{color:var(--neon2)}.cwho.warn{color:var(--warn)}
+.cbub strong{color:#fff}
+.cbub code{font-family:var(--mono);font-size:11.5px;
+  background:rgba(46,255,168,.08);border:1px solid rgba(46,255,168,.15);
+  border-radius:4px;padding:1px 6px;color:var(--neon)}
+
+/* ════ CHIPS ════ */
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+.chip{background:rgba(46,255,168,.06);border:1px solid rgba(46,255,168,.2);
+  border-radius:8px;padding:7px 13px;font-size:12px;color:var(--neon);
+  cursor:pointer;transition:all .15s;font-family:var(--mono);border:none;
+  border:1px solid rgba(46,255,168,.2)}
+.chip:hover:not(:disabled){background:rgba(46,255,168,.15);border-color:var(--neon)}
+.chip.csel{background:rgba(46,255,168,.18);border-color:var(--neon);
+  box-shadow:0 0 10px rgba(46,255,168,.2)}
+.chip:disabled{opacity:.3;cursor:default}
+
+/* ════ BYPASS BTN ════ */
+.bypass-row{display:flex;gap:10px;margin-top:13px}
+
+/* ════ TYPING ════ */
+.typing{display:flex;gap:5px;padding:3px 0}
+.typing span{width:7px;height:7px;border-radius:50%;background:var(--neon);opacity:.35}
+.typing span:nth-child(1){animation:td .75s 0s infinite}
+.typing span:nth-child(2){animation:td .75s .15s infinite}
+.typing span:nth-child(3){animation:td .75s .3s infinite}
+@keyframes td{0%,100%{opacity:.2;transform:scale(.75)}50%{opacity:1;transform:scale(1)}}
+
+/* ════ FIREWALL BADGE ════ */
+.fw-badge{display:inline-flex;align-items:center;gap:7px;
+  border-radius:7px;padding:6px 12px;font-family:var(--mono);
+  font-size:11px;font-weight:600;margin-bottom:10px}
+.fw-badge.cf  {background:rgba(255,184,48,.1); border:1px solid rgba(255,184,48,.3); color:var(--warn)}
+.fw-badge.ok  {background:rgba(46,255,168,.08);border:1px solid rgba(46,255,168,.2); color:var(--neon)}
+.fw-badge.waf {background:rgba(255,69,96,.08); border:1px solid rgba(255,69,96,.25); color:var(--danger)}
+
+/* ════ LANG GRID ════ */
+.lang-grid{display:flex;gap:10px;flex-wrap:wrap}
+.lbtn{flex:1;min-width:130px;padding:15px 12px;
+  background:rgba(0,0,0,.4);border:1.5px solid var(--border2);
+  border-radius:11px;color:var(--text);font-family:var(--mono);font-size:13px;
+  cursor:pointer;transition:all .15s;
+  display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
+.lbtn:hover{border-color:var(--neon2);color:#fff;transform:translateY(-1px)}
+.lbtn.lact{background:rgba(0,194,255,.1);border-color:var(--neon2);
+  color:var(--neon2);box-shadow:0 0 16px rgba(0,194,255,.15)}
+.lico{font-size:26px}.lname{font-weight:700;font-size:13px}
+.lsub{font-size:10px;opacity:.4;font-family:var(--body);line-height:1.4}
+
+/* ════ CODE BLOCK ════ */
+.code-block{background:#040b12;border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;margin-bottom:14px}
+.code-top{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 15px;border-bottom:1px solid var(--border);background:rgba(0,0,0,.35)}
+.code-fn{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.code-acts{display:flex;gap:7px;align-items:center}
+.btn-ico{background:transparent;border:1px solid var(--border2);
+  border-radius:6px;padding:5px 11px;font-family:var(--mono);
+  font-size:10.5px;cursor:pointer;transition:all .15s;
+  display:flex;align-items:center;gap:4px}
+.btn-ico.c{color:var(--muted)}.btn-ico.c:hover{border-color:var(--neon);color:var(--neon)}
+.btn-ico.d{color:var(--neon2);border-color:rgba(0,194,255,.22)}
+.btn-ico.d:hover{background:rgba(0,194,255,.1);border-color:var(--neon2)}
+.btn-ico.z{color:var(--warn);border-color:rgba(255,184,48,.25)}
+.btn-ico.z:hover{background:rgba(255,184,48,.1);border-color:var(--warn)}
+.btn-ico.t{color:var(--purple);border-color:rgba(176,111,255,.25)}
+.btn-ico.t:hover{background:rgba(176,111,255,.1);border-color:var(--purple)}
+pre.code-pre{padding:18px;overflow:auto;font-family:var(--mono);
+  font-size:12px;line-height:1.85;color:#a0b8c8;max-height:400px;
+  white-space:pre;tab-size:2}
+
+/* ════ META CHIPS ════ */
+.meta-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.mc{background:rgba(0,0,0,.38);border:1px solid var(--border2);
+  border-radius:6px;padding:5px 10px;font-family:var(--mono);
+  font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:5px}
+.mc .mv{color:#d0e0ee}
+.tag-cf{background:rgba(255,184,48,.12);border-color:rgba(255,184,48,.3);color:var(--warn)}
+.tag-cf .mv{color:var(--warn)}
+
+/* ════ TRY PANEL ════ */
+.try-panel{background:rgba(176,111,255,.04);border:1px solid rgba(176,111,255,.18);
+  border-radius:14px;padding:20px;margin-top:14px;animation:slideUp .3s ease}
+.try-title{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--purple);margin-bottom:14px;
+  display:flex;align-items:center;gap:8px}
+.try-result{background:rgba(0,0,0,.5);border:1px solid var(--border2);
+  border-radius:9px;padding:14px;margin-top:12px;
+  font-family:var(--mono);font-size:12px;line-height:1.85;
+  color:var(--text);max-height:260px;overflow-y:auto;white-space:pre-wrap}
+.try-result.success{border-color:rgba(46,255,168,.25);color:var(--neon)}
+.try-result.error  {border-color:rgba(255,69,96,.25);color:var(--danger)}
+
+/* ════ AI DEBUGGER PANEL ════ */
+.debugger{background:rgba(255,69,96,.04);border:1px solid rgba(255,69,96,.22);
+  border-radius:14px;padding:20px;margin-top:12px;animation:slideUp .28s ease}
+.debugger-title{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--danger);margin-bottom:14px;
+  display:flex;align-items:center;gap:8px}
+.analysis-box{background:rgba(0,0,0,.4);border:1px solid rgba(255,69,96,.18);
+  border-radius:9px;padding:14px;margin-bottom:14px;font-size:13px;line-height:1.8}
+.analysis-box .arow{display:flex;gap:8px;margin-bottom:6px;align-items:flex-start}
+.analysis-box .albl{font-family:var(--mono);font-size:10px;letter-spacing:1px;
+  color:var(--muted);text-transform:uppercase;width:90px;flex-shrink:0;padding-top:2px}
+.analysis-box .aval{color:var(--text)}
+.analysis-box .aval.err{color:var(--danger)}.analysis-box .aval.fix{color:var(--neon)}
+.sev-badge{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:4px;font-weight:700}
+.sev-critical{background:rgba(255,69,96,.2);color:var(--danger);border:1px solid rgba(255,69,96,.3)}
+.sev-high    {background:rgba(255,184,48,.15);color:var(--warn);border:1px solid rgba(255,184,48,.3)}
+.sev-medium  {background:rgba(0,194,255,.12);color:var(--neon2);border:1px solid rgba(0,194,255,.25)}
+.sev-low     {background:rgba(46,255,168,.1);color:var(--neon);border:1px solid rgba(46,255,168,.2)}
+.fix-mode-row{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+.fix-mode-btn{padding:8px 13px;background:rgba(0,0,0,.4);border:1px solid var(--border2);
+  border-radius:8px;font-family:var(--mono);font-size:11px;color:var(--muted);
+  cursor:pointer;transition:all .15s;text-align:center;line-height:1.4}
+.fix-mode-btn:hover{border-color:var(--danger);color:var(--danger)}
+.fix-mode-btn.fmact{background:rgba(255,69,96,.12);border-color:var(--danger);
+  color:var(--danger);box-shadow:0 0 10px rgba(255,69,96,.15)}
+.fixed-code-block{background:#040b12;border:1px solid rgba(46,255,168,.2);
+  border-radius:12px;overflow:hidden;margin-bottom:12px}
+.fixed-code-top{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 15px;border-bottom:1px solid rgba(46,255,168,.15);background:rgba(46,255,168,.04)}
+.fixed-code-label{font-family:var(--mono);font-size:11px;color:var(--neon);display:flex;align-items:center;gap:7px}
+pre.fixed-pre{padding:16px;overflow:auto;font-family:var(--mono);font-size:12px;
+  line-height:1.8;color:#a0b8c8;max-height:360px;white-space:pre;tab-size:2}
+pre.fixed-pre::-webkit-scrollbar{height:3px;width:3px}
+pre.fixed-pre::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+.diff-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  padding:10px 14px;background:rgba(0,0,0,.3);border-radius:8px;margin-bottom:12px}
+.diff-stat{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.diff-stat span{color:#fff}
+.apply-row{display:flex;gap:9px;flex-wrap:wrap}
+.btn-apply{flex:1;background:rgba(46,255,168,.12);border:1px solid rgba(46,255,168,.35);
+  border-radius:9px;padding:12px;color:var(--neon);
+  font-family:var(--head);font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;text-align:center}
+.btn-apply:hover{background:rgba(46,255,168,.22);border-color:var(--neon);box-shadow:0 0 14px rgba(46,255,168,.2)}
+.btn-apply:disabled{opacity:.4;cursor:not-allowed}
+.btn-revert{flex:1;background:rgba(255,184,48,.07);border:1px solid rgba(255,184,48,.22);
+  border-radius:9px;padding:12px;color:var(--warn);font-family:var(--mono);font-size:12px;cursor:pointer;transition:all .15s;text-align:center}
+.btn-revert:hover{background:rgba(255,184,48,.15);border-color:var(--warn)}
+.btn-revert:disabled{opacity:.3;cursor:not-allowed}
+.btn-discard{background:transparent;border:1px solid var(--border2);
+  border-radius:9px;padding:12px 16px;color:var(--muted);font-family:var(--mono);font-size:12px;cursor:pointer;transition:all .15s}
+.btn-discard:hover{border-color:var(--danger);color:var(--danger)}
+.edit-box{background:rgba(0,194,255,.04);border:1px solid rgba(0,194,255,.18);border-radius:12px;padding:18px;margin-top:14px}
+.edit-box-title{font-family:var(--mono);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--neon2);margin-bottom:12px}
+textarea.edit-ta{width:100%;background:rgba(0,0,0,.5);border:1px solid var(--border2);
+  border-radius:8px;padding:11px 14px;color:#e0efff;font-family:var(--body);font-size:13px;
+  outline:none;resize:vertical;min-height:72px;transition:border-color .2s;line-height:1.6}
+textarea.edit-ta:focus{border-color:rgba(0,194,255,.45)}
+textarea.edit-ta::placeholder{color:var(--muted)}
+.history-row{display:flex;gap:8px;align-items:center;padding:9px 12px;
+  border:1px solid var(--border2);border-radius:8px;margin-bottom:7px;font-family:var(--mono);font-size:11px}
+.history-ver{color:var(--neon2);font-weight:700;width:60px}
+.history-info{flex:1;color:var(--muted)}
+.history-lines{color:var(--text);font-size:10px}
+.btn-hist-revert{background:transparent;border:1px solid rgba(255,184,48,.25);
+  border-radius:6px;padding:4px 10px;color:var(--warn);font-family:var(--mono);font-size:10px;cursor:pointer;transition:all .12s}
+.btn-hist-revert:hover{background:rgba(255,184,48,.1)}
+
+/* ════ SCRAPERS LIST ════ */
+.scraper-card{background:var(--cardB);border:1px solid var(--border2);
+  border-radius:11px;padding:16px;margin-bottom:10px;
+  display:flex;gap:14px;align-items:flex-start;transition:border-color .2s}
+.scraper-card:hover{border-color:var(--border3)}
+.sc-info{flex:1;min-width:0}
+.sc-name{font-weight:700;font-size:14px;color:#fff;
+  margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sc-target{font-size:12.5px;color:var(--muted);margin-bottom:8px}
+.sc-meta{display:flex;gap:6px;flex-wrap:wrap}
+.sc-tag{font-family:var(--mono);font-size:10px;padding:3px 8px;
+  border-radius:5px;background:rgba(0,0,0,.4);border:1px solid var(--border2);color:var(--muted)}
+.sc-acts{display:flex;gap:7px;flex-direction:column}
+
+/* ════ BOTTOM ACTIONS ════ */
+.bot-acts{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.btn-sec{flex:1;background:rgba(46,255,168,.07);border:1px solid rgba(46,255,168,.2);
+  border-radius:10px;padding:12px;color:var(--neon);
+  font-family:var(--mono);font-size:11.5px;cursor:pointer;transition:all .15s;text-align:center}
+.btn-sec:hover{background:rgba(46,255,168,.14)}
+.btn-rst{flex:1;background:transparent;border:1px solid var(--border2);
+  border-radius:10px;padding:12px;color:var(--muted);
+  font-family:var(--mono);font-size:11.5px;cursor:pointer;transition:all .15s;text-align:center}
+.btn-rst:hover{border-color:var(--danger);color:var(--danger)}
+
+/* ════ INFO BOX ════ */
+.info-box{border-radius:10px;padding:14px 16px;margin-bottom:14px;font-size:13px;line-height:1.75}
+.info-box.blue{background:rgba(0,194,255,.05);border:1px solid rgba(0,194,255,.2)}
+.info-box.yellow{background:rgba(255,184,48,.05);border:1px solid rgba(255,184,48,.22)}
+.info-box strong{color:var(--neon2)}
+.info-box.yellow strong{color:var(--warn)}
+.info-box code{font-family:var(--mono);font-size:11.5px;
+  background:rgba(0,194,255,.1);border:1px solid rgba(0,194,255,.2);
+  border-radius:4px;padding:1px 6px;color:var(--neon2)}
+
+/* ════ REPLY INPUT ════ */
+.reply-row{display:flex;gap:10px;margin-top:13px}
+.reply-inp{flex:1;background:rgba(0,0,0,.4);border:1px solid var(--border2);
+  border-radius:8px;padding:10px 14px;color:#e0efff;
+  font-family:var(--body);font-size:13px;outline:none;transition:border-color .2s}
+.reply-inp:focus{border-color:rgba(0,194,255,.45)}
+.reply-inp::placeholder{color:var(--muted)}
+.btn-send{background:rgba(0,194,255,.1);border:1px solid rgba(0,194,255,.28);
+  border-radius:8px;padding:10px 15px;color:var(--neon2);
+  font-family:var(--mono);font-size:12px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn-send:hover:not(:disabled){background:rgba(0,194,255,.2);border-color:var(--neon2)}
+.btn-send:disabled{opacity:.35;cursor:not-allowed}
+
+/* ════ BADGE ════ */
+.copied-tag{background:rgba(46,255,168,.14);border:1px solid var(--neon);
+  border-radius:5px;padding:3px 9px;font-family:var(--mono);
+  font-size:10px;color:var(--neon);animation:popIn .2s ease}
+@keyframes popIn{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
+
+.section-title{font-family:var(--mono);font-size:10px;letter-spacing:2px;
+  color:var(--muted);text-transform:uppercase;margin-bottom:12px;
+  padding-bottom:8px;border-bottom:1px solid var(--border)}
+
+/* ════ DOCS VIEW ════ */
+.docs-section{margin-bottom:24px}
+.docs-title{font-family:var(--head);font-size:16px;color:#fff;
+  margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.endpoint-row{background:var(--cardB);border:1px solid var(--border2);
+  border-radius:9px;padding:12px 16px;margin-bottom:8px;
+  display:flex;gap:12px;align-items:flex-start}
+.method-badge{font-family:var(--mono);font-size:10px;font-weight:700;
+  padding:3px 10px;border-radius:5px;flex-shrink:0;margin-top:2px}
+.method-badge.GET {background:rgba(46,255,168,.15);color:var(--neon)}
+.method-badge.POST{background:rgba(0,194,255,.15);color:var(--neon2)}
+.method-badge.DEL {background:rgba(255,69,96,.15); color:var(--danger)}
+.ep-path{font-family:var(--mono);font-size:13px;color:#fff;margin-bottom:3px}
+.ep-desc{font-size:12.5px;color:var(--muted)}
+
+/* ════ EMPTY ════ */
+.empty-state{text-align:center;padding:40px 20px;color:var(--muted)}
+.empty-ico{font-size:40px;margin-bottom:12px;opacity:.4}
+.empty-txt{font-size:14px}
+
+/* ════ TOAST ════ */
+#toast{position:fixed;bottom:24px;right:24px;z-index:9999;
+  font-family:var(--mono);font-size:12px;padding:10px 18px;
+  border-radius:9px;opacity:0;transition:opacity .3s;pointer-events:none;
+  max-width:280px;line-height:1.5}
+#toast.show{opacity:1}
+#toast.ok  {background:rgba(46,255,168,.15);border:1px solid var(--neon);color:var(--neon)}
+#toast.err {background:rgba(255,69,96,.15); border:1px solid var(--danger);color:var(--danger)}
+#toast.info{background:rgba(0,194,255,.13);  border:1px solid var(--neon2);color:var(--neon2)}
+
+/* ════ HIDE/SHOW ════ */
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="bg-grid"></div>
+<div class="bg-orb bg-orb1"></div>
+<div class="bg-orb bg-orb2"></div>
+<div id="toast"></div>
+
+<div class="app">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="badge-live"><span class="ldot"></span>SmartScrapeAI v2.0 &bull; Multi-Provider AI</div>
+    <h1 class="app-title"><span class="tg">SmartScrape</span><span class="tw">AI</span></h1>
+    <p class="app-sub">
+      Input URL website apapun &rarr; AI otomatis analisa + deteksi firewall &rarr;
+      <strong>Generate kode scraper lengkap</strong> dalam Node.js, Python, atau PHP &rarr;
+      <strong>Download ZIP + panduan Termux</strong>.
+    </p>
+  </div>
+
+  <!-- NAV TABS -->
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="switchTab('generate',this)">⚡ Generate Scraper</button>
+    <button class="nav-tab"        onclick="switchTab('scrapers',this)">📦 Scrapers Tersimpan</button>
+    <button class="nav-tab"        onclick="switchTab('apidocs',this)">📋 API Docs</button>
+  </div>
+
+  <!-- ══ TAB: GENERATE ══ -->
+  <div id="tab-generate">
+
+    <!-- STEP BAR -->
+    <div class="stepbar" id="stepbar">
+      <!-- diisi JS -->
+    </div>
+
+    <!-- STEP 0: PROVIDER + URL -->
+    <div class="card" id="card-setup">
+      <div class="card-head">
+        <span class="ctag">🔑 Setup AI Provider &amp; URL Target</span>
+        <div class="cdots"><span></span><span></span><span></span></div>
+      </div>
+      <div class="card-body">
+
+        <div class="section-title">Pilih AI Provider</div>
+        <div class="provider-grid" id="provider-grid">
+          <!-- diisi JS -->
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="inp-apikey">API Key Provider Terpilih</label>
+          <div class="inp-row">
+            <input class="inp" id="inp-apikey" type="password" placeholder="sk-... / AIza... / gsk_..."/>
+            <button class="btn-ghost" onclick="toggleKey()">👁</button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="inp-model">Model (opsional — kosongkan untuk default)</label>
+          <input class="inp" id="inp-model" type="text" placeholder="contoh: gpt-4o, claude-sonnet-4-20250514, gemini-1.5-flash"/>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="inp-url">URL Target Website</label>
+          <div class="inp-row">
+            <input class="inp" id="inp-url" type="text"
+              placeholder="https://tiktok.com/@user/video/... atau website apapun"
+              onkeydown="if(event.key==='Enter')startAnalyze()"/>
+            <button class="btn-primary" onclick="startAnalyze()" id="btn-analyze">
+              ⚡ Analisa
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 1: CHAT AGENT -->
+    <div class="card hidden" id="card-chat">
+      <div class="card-head">
+        <span class="ctag">🤖 SmartScrapeAI Agent</span>
+        <button class="btn-ghost" style="margin-left:auto;padding:6px 12px;font-size:11px" onclick="resetAll()">↺ Reset</button>
+        <div class="cdots" style="margin-left:8px"><span></span><span></span><span></span></div>
+      </div>
+      <div class="card-body">
+        <div id="fw-badges"></div>
+        <div class="chat-scroll" id="chat-scroll">
+          <!-- pesan diisi JS -->
+        </div>
+        <!-- Bypass buttons — muncul saat CF detected -->
+        <div class="bypass-row hidden" id="bypass-row">
+          <button class="btn-warn" onclick="handleBypass(true)">🔓 Ya, Bypass Cloudflare!</button>
+          <button class="btn-danger" onclick="handleBypass(false)">⛔ Tidak, Lanjut Biasa</button>
+        </div>
+        <!-- Custom target input -->
+        <div class="reply-row hidden" id="custom-target-row">
+          <input class="reply-inp" id="custom-target-inp"
+            placeholder="Atau ketik target custom... misal: harga produk, komentar, embed video, dll"
+            onkeydown="if(event.key==='Enter')sendCustomTarget()"/>
+          <button class="btn-send" onclick="sendCustomTarget()">Kirim →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 2: PILIH BAHASA -->
+    <div class="card hidden" id="card-lang">
+      <div class="card-head">
+        <span class="ctag">💻 Pilih Bahasa Output</span>
+        <div class="cdots"><span></span><span></span><span></span></div>
+      </div>
+      <div class="card-body">
+        <div class="section-title">Generate Kode Sebagai — ZIP Siap Pakai Termux</div>
+        <div class="lang-grid">
+          <button class="lbtn lact" onclick="setLang('nodejs',this)">
+            <span class="lico">🟩</span>
+            <span class="lname">Node.js</span>
+            <span class="lsub">axios / puppeteer-extra<br/>+ stealth bypass</span>
+          </button>
+          <button class="lbtn" onclick="setLang('python',this)">
+            <span class="lico">🐍</span>
+            <span class="lname">Python</span>
+            <span class="lsub">cloudscraper<br/>+ BeautifulSoup4</span>
+          </button>
+          <button class="lbtn" onclick="setLang('php',this)">
+            <span class="lico">🐘</span>
+            <span class="lname">PHP</span>
+            <span class="lsub">cURL + DOMDocument<br/>+ Guzzle</span>
+          </button>
+        </div>
+
+        <div class="info-box yellow hidden" id="cf-lang-notice" style="margin-top:14px">
+          <strong>⚠️ Mode Bypass Cloudflare Aktif</strong><br/>
+          Kode yang di-generate akan menggunakan teknik stealth bypass
+          sesuai bahasa yang dipilih.
+        </div>
+
+        <button class="btn-primary btn-full" id="btn-generate" onclick="generateCode()">
+          ⚡ Generate Kode Node.js
+        </button>
+      </div>
+    </div>
+
+    <!-- STEP 3: KODE HASIL -->
+    <div class="card hidden" id="card-result">
+      <div class="card-head">
+        <span class="ctag">📄 Kode Scraper Siap</span>
+        <div class="cdots"><span></span><span></span><span></span></div>
+      </div>
+      <div class="card-body">
+
+        <div class="meta-row" id="result-meta"></div>
+
+        <div class="code-block">
+          <div class="code-top">
+            <span class="code-fn" id="result-filename">scraper.js</span>
+            <div class="code-acts">
+              <span class="copied-tag hidden" id="copied-tag">✓ Disalin!</span>
+              <button class="btn-ico c" onclick="copyCode()">⎘ Salin</button>
+              <button class="btn-ico d" onclick="downloadFile()">⬇ File</button>
+              <button class="btn-ico z" onclick="downloadZip()" id="btn-zip">📦 ZIP</button>
+              <button class="btn-ico t" onclick="toggleTry()">🧪 Try</button>
+            </div>
+          </div>
+          <pre class="code-pre" id="code-output"></pre>
+        </div>
+
+        <!-- TRY PANEL -->
+        <div class="try-panel hidden" id="try-panel">
+          <div class="try-title">🧪 Try &amp; Debug — Input Scraper</div>
+          <div id="try-inputs"><!-- diisi JS --></div>
+          <button class="btn-primary" style="margin-top:12px" onclick="runTry()" id="btn-run-try">▶ Jalankan Try</button>
+          <div class="try-result hidden" id="try-result"></div>
+
+          <!-- AI DEBUGGER — muncul otomatis kalau ada error -->
+          <div class="debugger hidden" id="ai-debugger">
+            <div class="debugger-title">🤖 AI Auto-Fix Debugger</div>
+
+            <!-- Analisa error -->
+            <div class="analysis-box" id="error-analysis"></div>
+
+            <!-- Fix mode selector -->
+            <div style="font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Pilih Mode Fix</div>
+            <div class="fix-mode-row" id="fix-modes">
+              <button class="fix-mode-btn fmact" onclick="setFixMode('auto',this)">⚡ Auto Fix<br/><span style="font-size:9px;opacity:.6">Perbaiki semua bug</span></button>
+              <button class="fix-mode-btn" onclick="setFixMode('patch',this)">🩹 Patch<br/><span style="font-size:9px;opacity:.6">Hanya bagian error</span></button>
+              <button class="fix-mode-btn" onclick="setFixMode('rewrite',this)">✍️ Rewrite<br/><span style="font-size:9px;opacity:.6">Tulis ulang total</span></button>
+              <button class="fix-mode-btn" onclick="setFixMode('enhance',this)">🚀 Enhance<br/><span style="font-size:9px;opacity:.6">Fix + improve</span></button>
+            </div>
+
+            <button class="btn-primary" style="width:100%;justify-content:center;margin-bottom:14px" onclick="runAutoFix()" id="btn-autofix">
+              🤖 Fix dengan AI Sekarang
+            </button>
+
+            <!-- Hasil fix -->
+            <div class="hidden" id="fix-result-wrap">
+              <div class="diff-bar" id="diff-bar"></div>
+              <div class="fixed-code-block">
+                <div class="fixed-code-top">
+                  <span class="fixed-code-label">✅ Kode yang Sudah Difix</span>
+                  <div style="display:flex;gap:7px">
+                    <button class="btn-ico c" onclick="copyFixedCode()">⎘ Salin</button>
+                  </div>
+                </div>
+                <pre class="fixed-pre" id="fixed-code-pre"></pre>
+              </div>
+              <div class="apply-row">
+                <button class="btn-apply" onclick="applyFix()" id="btn-apply-fix">✅ Apply — Terapkan ke Scraper</button>
+                <button class="btn-revert" onclick="revertCode()" id="btn-revert-fix" disabled>↩ Revert ke Versi Sebelumnya</button>
+                <button class="btn-discard" onclick="discardFix()">✕ Buang</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- MANUAL EDIT BOX -->
+          <div class="edit-box" id="edit-box" style="display:none">
+            <div class="edit-box-title">✏️ Edit Manual dengan Instruksi AI</div>
+            <textarea class="edit-ta" id="edit-instruction"
+              placeholder="Contoh: Ubah timeout menjadi 30 detik&#10;Tambahkan retry 3x jika gagal&#10;Ganti selector dari .price menjadi span.product-price&#10;Tambahkan logging ke file output.json"></textarea>
+            <div style="display:flex;gap:9px;margin-top:10px">
+              <button class="btn-primary" style="flex:1;justify-content:center" onclick="runEdit()">✏️ Terapkan Edit</button>
+              <button class="btn-ghost" onclick="toggleEditBox()">Tutup</button>
+            </div>
+          </div>
+
+          <!-- VERSION HISTORY -->
+          <div id="version-history" style="display:none;margin-top:14px">
+            <div style="font-family:var(--mono);font-size:10px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:10px">📋 Version History</div>
+            <div id="history-list"></div>
+          </div>
+
+          <!-- BOTTOM TOOL ROW -->
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+            <button class="btn-ico" style="color:var(--neon2);border-color:rgba(0,194,255,.25)" onclick="toggleEditBox()">✏️ Edit Manual</button>
+            <button class="btn-ico" style="color:var(--warn);border-color:rgba(255,184,48,.25)" onclick="loadHistory()">📋 History</button>
+            <button class="btn-ico" style="color:var(--muted)" onclick="toggleTry()">✕ Tutup</button>
+          </div>
+        </div>
+
+        <div class="info-box blue" id="zip-info">
+          <strong>📦 Isi ZIP:</strong> file kode · package/requirements/composer · README.md · run.sh<br/>
+          <span style="color:var(--muted)">Di Termux: extract → jalankan <code>bash run.sh</code> — dependensi auto-install semua.</span>
+        </div>
+
+        <div class="bot-acts">
+          <button class="btn-sec" onclick="backToLang()">↩ Ganti Bahasa</button>
+          <button class="btn-rst" onclick="resetAll()">↺ Scrape Website Lain</button>
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- /tab-generate -->
+
+  <!-- ══ TAB: SCRAPERS TERSIMPAN ══ -->
+  <div id="tab-scrapers" class="hidden">
+    <div class="card">
+      <div class="card-head">
+        <span class="ctag">📦 Scrapers yang Sudah Dibuat</span>
+        <button class="btn-ghost" style="margin-left:auto;padding:6px 12px;font-size:11px" onclick="loadScrapers()">↻ Refresh</button>
+        <div class="cdots" style="margin-left:8px"><span></span><span></span><span></span></div>
+      </div>
+      <div class="card-body" id="scrapers-list">
+        <div class="empty-state">
+          <div class="empty-ico">📭</div>
+          <div class="empty-txt">Belum ada scraper tersimpan.<br/>Generate scraper dulu di tab "Generate".</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ TAB: API DOCS ══ -->
+  <div id="tab-apidocs" class="hidden">
+    <div class="card">
+      <div class="card-head">
+        <span class="ctag">📋 API Documentation</span>
+        <a href="/api/docs" target="_blank" class="btn-ghost" style="margin-left:auto;padding:6px 12px;font-size:11px;text-decoration:none">🔗 JSON Raw</a>
+        <div class="cdots" style="margin-left:8px"><span></span><span></span><span></span></div>
+      </div>
+      <div class="card-body" id="apidocs-body">
+        Loading...
+      </div>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+<script>
+// ═══════════════════════════════════════════════════════════
+//  SmartScrapeAI Frontend v2.0
+// ═══════════════════════════════════════════════════════════
+
+// ── State ──
+const S = {
+  step: 0,
+  provider: 'anthropic',
+  apiKey: '',
+  model: '',
+  url: '',
+  firewall: null,
+  bypassCF: false,
+  target: '',
+  lang: 'nodejs',
+  code: '',
+  scraperId: '',
+  trySchema: [],
+  msgs: [],
+  typing: false,
+};
+
+// ── Provider Definitions ──
+const PROVIDERS = [
+  { id:'anthropic', name:'Claude',   ico:'🟣', sub:'Sonnet/Opus',          model:'claude-sonnet-4-20250514' },
+  { id:'openai',    name:'OpenAI',   ico:'🟢', sub:'GPT-4o / 4-turbo',     model:'gpt-4o'                   },
+  { id:'groq',      name:'Groq',     ico:'🟡', sub:'Llama3-70B (Fast)',     model:'llama3-70b-8192'          },
+  { id:'gemini',    name:'Gemini',   ico:'🔵', sub:'1.5 Flash/Pro',        model:'gemini-1.5-flash'         },
+  { id:'deepseek',  name:'DeepSeek', ico:'🔷', sub:'DeepSeek-Chat',        model:'deepseek-chat'            },
+  { id:'mistral',   name:'Mistral',  ico:'🟠', sub:'Large/Medium',         model:'mistral-large-latest'     },
+  { id:'xai',       name:'Grok',     ico:'⚡', sub:'xAI Grok-Beta',        model:'grok-beta'                },
+];
+
+const LANG_INFO = {
+  nodejs: { label:'Node.js', file:'scraper.js',  ext:'js',  dep:'package.json',       run:'node scraper.js',    install:'npm install' },
+  python: { label:'Python',  file:'scraper.py',  ext:'py',  dep:'requirements.txt',   run:'python3 scraper.py', install:'pip3 install -r requirements.txt' },
+  php:    { label:'PHP',     file:'scraper.php', ext:'php', dep:'composer.json',       run:'php scraper.php',    install:'composer install' },
+};
+
+// ── Init ──
+function init() {
+  renderProviderGrid();
+  renderStepBar();
+}
+
+// ── Provider Grid ──
+function renderProviderGrid() {
+  const grid = document.getElementById('provider-grid');
+  grid.innerHTML = PROVIDERS.map(p => `
+    <button class="prov-btn ${p.id === S.provider ? 'pact' : ''}"
+      onclick="setProvider('${p.id}', this)">
+      <span class="prov-ico">${p.ico}</span>
+      <span class="prov-name">${p.name}</span>
+      <span class="prov-model">${p.sub}</span>
+    </button>
+  `).join('');
+}
+
+function setProvider(id, btn) {
+  S.provider = id;
+  document.querySelectorAll('.prov-btn').forEach(b => b.classList.remove('pact'));
+  btn.classList.add('pact');
+  const prov = PROVIDERS.find(p => p.id === id);
+  const modelInp = document.getElementById('inp-model');
+  modelInp.placeholder = `default: ${prov.model}`;
+}
+
+// ── Step Bar ──
+const STEP_LABELS = ['🔗 URL', '🤖 Analisa', '🛡️ Firewall', '🎯 Target', '💻 Bahasa', '📦 Kode'];
+function renderStepBar() {
+  const bar = document.getElementById('stepbar');
+  bar.innerHTML = STEP_LABELS.map((lbl, i) => `
+    <div class="step-it ${S.step > i ? 'sd' : S.step === i ? 'sa' : ''}" style="flex:${i < STEP_LABELS.length-1 ? 1 : 0};display:flex;align-items:center;gap:7px">
+      <div class="sc">${S.step > i ? '✓' : i+1}</div>
+      <div class="sl">${lbl}</div>
+    </div>
+    ${i < STEP_LABELS.length-1 ? `<div class="sline ${S.step > i ? 'sd' : ''}"></div>` : ''}
+  `).join('');
+}
+
+// ── Tab Switching ──
+function switchTab(tab, btn) {
+  ['generate','scrapers','apidocs'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('hidden', t !== tab);
+  });
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (tab === 'scrapers') loadScrapers();
+  if (tab === 'apidocs')  loadApiDocs();
+}
+
+// ── Toast ──
+let toastTimer;
+function showToast(msg, type='ok') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `show ${type}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = '', 3000);
+}
+
+// ── Toggle API Key visibility ──
+function toggleKey() {
+  const inp = document.getElementById('inp-apikey');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+// ── Chat helpers ──
+function addMsg(role, html, opts = {}) {
+  const scroll = document.getElementById('chat-scroll');
+  const div = document.createElement('div');
+  div.className = 'cmsg';
+  const avatarClass = opts.warn ? 'warn' : role;
+  const avatarIcon  = opts.warn ? '🛡️' : role === 'ai' ? '🤖' : '👤';
+  const bubbleClass = opts.warn ? 'warn' : role;
+  const whoClass    = opts.warn ? 'warn' : role;
+  const whoLabel    = role === 'ai' ? 'SmartScrapeAI' : 'Kamu';
+
+  div.innerHTML = `
+    <div class="cava ${avatarClass}">${avatarIcon}</div>
+    <div class="cbub ${bubbleClass}">
+      <div class="cwho ${whoClass}">${whoLabel}</div>
+      <div>${html}</div>
+      ${opts.chips ? renderChips(opts.chips) : ''}
+    </div>`;
+  scroll.appendChild(div);
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+function renderChips(chips) {
+  return `<div class="chips">${chips.map(c =>
+    `<button class="chip" onclick="pickTarget('${c.replace(/'/g,"\\'")}',this)">${c}</button>`
+  ).join('')}</div>`;
+}
+
+function showTyping(show) {
+  const id = 'typing-indicator';
+  let el = document.getElementById(id);
+  if (show) {
+    if (el) return;
+    const scroll = document.getElementById('chat-scroll');
+    el = document.createElement('div');
+    el.id = id; el.className = 'cmsg';
+    el.innerHTML = `<div class="cava ai">🤖</div>
+      <div class="cbub ai"><div class="cwho ai">SmartScrapeAI</div>
+        <div class="typing"><span></span><span></span><span></span></div></div>`;
+    scroll.appendChild(el);
+    scroll.scrollTop = scroll.scrollHeight;
+  } else {
+    if (el) el.remove();
+  }
+}
+
+// ── Firewall Badges ──
+function renderFwBadges(fw) {
+  const wrap = document.getElementById('fw-badges');
+  if (!fw) { wrap.innerHTML = ''; return; }
+  const badges = [];
+  if (fw.cloudflare) badges.push(`<span class="fw-badge cf">🟡 Cloudflare Terdeteksi</span>`);
+  if (fw.waf)        badges.push(`<span class="fw-badge waf">🔴 WAF Terdeteksi</span>`);
+  if (fw.bot_protection) badges.push(`<span class="fw-badge waf">🤖 Bot Protection</span>`);
+  if (!fw.bypass_recommended) badges.push(`<span class="fw-badge ok">✅ Tidak Ada Proteksi Khusus</span>`);
+  wrap.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px">${badges.join('')}</div>`;
+}
+
+// ── STEP 1: Analyze ──
+async function startAnalyze() {
+  const url    = document.getElementById('inp-url').value.trim();
+  const apiKey = document.getElementById('inp-apikey').value.trim();
+  const model  = document.getElementById('inp-model').value.trim();
+
+  if (!url)    return showToast('⚠️ Masukkan URL target dulu!', 'err');
+  if (!apiKey) return showToast('⚠️ Masukkan API Key dulu!', 'err');
+
+  S.url = url; S.apiKey = apiKey; S.model = model;
+  S.step = 1;
+  renderStepBar();
+
+  document.getElementById('card-setup').querySelector('.btn-primary').disabled = true;
+  document.getElementById('inp-url').disabled = true;
+  document.getElementById('inp-apikey').disabled = true;
+  document.getElementById('card-chat').classList.remove('hidden');
+
+  showTyping(true);
+
+  try {
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, provider: S.provider, apiKey, model }),
+    });
+    const data = await res.json();
+    showTyping(false);
+
+    if (!res.ok) throw new Error(data.error || 'Gagal analisa');
+
+    S.firewall = data.firewall;
+    renderFwBadges(data.firewall);
+
+    const ai = data.ai;
+    const fwNote = data.firewall?.bypass_recommended
+      ? `\n\n⚠️ <strong>Terdeteksi perlindungan firewall/Cloudflare!</strong><br/>${data.firewall.details.join('<br/>')}`
+      : '';
+
+    addMsg('ai',
+      `${ai.greeting.replace(/\n/g,'<br/>')}${fwNote}<br/><br/>${ai.question}`,
+      { warn: data.firewall?.bypass_recommended, chips: ai.suggestions }
+    );
+
+    if (data.firewall?.bypass_recommended) {
+      S.step = 2; // tunggu bypass decision
+      renderStepBar();
+      document.getElementById('bypass-row').classList.remove('hidden');
+    } else {
+      S.step = 3;
+      renderStepBar();
+      document.getElementById('custom-target-row').classList.remove('hidden');
+    }
+  } catch (e) {
+    showTyping(false);
+    addMsg('ai', `❌ Error: ${e.message}<br/>Coba cek API key dan koneksi kamu.`, { warn: false });
+    showToast('Error: ' + e.message, 'err');
+    document.getElementById('inp-url').disabled = false;
+    document.getElementById('inp-apikey').disabled = false;
+    document.getElementById('card-setup').querySelector('.btn-primary').disabled = false;
+    S.step = 0; renderStepBar();
+  }
+}
+
+// ── Bypass Decision ──
+async function handleBypass(yes) {
+  document.getElementById('bypass-row').classList.add('hidden');
+  S.bypassCF = yes;
+  addMsg('user', yes ? '✅ Ya, bypass Cloudflare!' : '❌ Tidak, lanjut tanpa bypass');
+  showTyping(true);
+
+  await sleep(600);
+  showTyping(false);
+
+  if (yes) {
+    addMsg('ai', '🔓 Mode <strong>stealth bypass aktif</strong>! Akan pakai puppeteer-stealth, cloudscraper, rotate headers + random delay.<br/><br/>Sekarang, apa yang ingin kamu scrape dari website ini?');
+    if (document.getElementById('cf-lang-notice'))
+      document.getElementById('cf-lang-notice').classList.remove('hidden');
+  } else {
+    addMsg('ai', '⚠️ Oke, lanjut tanpa bypass. Scraping mungkin diblock oleh proteksi mereka ya.<br/><br/>Apa yang ingin kamu ambil?');
+  }
+
+  S.step = 3; renderStepBar();
+  document.getElementById('custom-target-row').classList.remove('hidden');
+}
+
+// ── Pick Target from Chip ──
+function pickTarget(target, btn) {
+  if (S.target) return; // sudah dipilih
+  document.querySelectorAll('.chip').forEach(c => { c.disabled = true; });
+  btn.classList.add('csel');
+  S.target = target;
+  S.step = 3; renderStepBar();
+  document.getElementById('custom-target-row').classList.add('hidden');
+  confirmTarget(target);
+}
+
+// ── Custom Target ──
+function sendCustomTarget() {
+  const inp = document.getElementById('custom-target-inp');
+  const t = inp.value.trim();
+  if (!t) return;
+  inp.value = '';
+  S.target = t;
+  document.getElementById('custom-target-row').classList.add('hidden');
+  addMsg('user', t);
+  confirmTarget(t);
+}
+
+async function confirmTarget(target) {
+  showTyping(true);
+  await sleep(700);
+  showTyping(false);
+  addMsg('ai', `Sip! Kita akan scrape <strong>${target}</strong> dari <code>${getSiteName()}</code>. 🎯<br/><br/>Sekarang pilih bahasa pemrograman untuk kode scrapernya:`);
+  S.step = 4; renderStepBar();
+  document.getElementById('card-lang').classList.remove('hidden');
+  if (S.bypassCF) document.getElementById('cf-lang-notice').classList.remove('hidden');
+}
+
+// ── Language Select ──
+function setLang(lang, btn) {
+  S.lang = lang;
+  document.querySelectorAll('.lbtn').forEach(b => b.classList.remove('lact'));
+  btn.classList.add('lact');
+  document.getElementById('btn-generate').textContent = `⚡ Generate Kode ${LANG_INFO[lang].label}`;
+}
+
+// ── Generate Code ──
+async function generateCode() {
+  const btn = document.getElementById('btn-generate');
+  btn.disabled = true;
+  btn.textContent = '⏳ Generating...';
+  S.step = 4; renderStepBar();
+
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: S.url, target: S.target, lang: S.lang,
+        bypassCF: S.bypassCF, provider: S.provider,
+        apiKey: S.apiKey, model: S.model,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gagal generate');
+
+    S.code      = data.code;
+    S.scraperId = data.id;
+    S.trySchema = data.trySchema || [];
+
+    S.step = 5; renderStepBar();
+    addMsg('ai', `✅ Kode <strong>${LANG_INFO[S.lang].label}</strong> scraper siap! 🚀<br/>Klik <strong>📦 ZIP</strong> untuk download semua file termasuk panduan Termux.`);
+
+    renderResult();
+    document.getElementById('card-result').classList.remove('hidden');
+    document.getElementById('card-result').scrollIntoView({ behavior:'smooth', block:'start' });
+
+  } catch(e) {
+    showToast('❌ ' + e.message, 'err');
+    btn.disabled = false;
+    btn.textContent = `⚡ Generate Kode ${LANG_INFO[S.lang].label}`;
+  }
+}
+
+// ── Render Result ──
+function renderResult() {
+  const li = LANG_INFO[S.lang];
+  document.getElementById('result-filename').textContent = `📄 ${li.file}`;
+  document.getElementById('code-output').textContent = S.code;
+
+  // Meta chips
+  const meta = document.getElementById('result-meta');
+  meta.innerHTML = [
+    `<div class="mc">🌐 <span class="mv">${getSiteName()}</span></div>`,
+    `<div class="mc">🎯 <span class="mv">${S.target}</span></div>`,
+    `<div class="mc">💻 <span class="mv">${li.label}</span></div>`,
+    `<div class="mc">📁 <span class="mv">${li.file}</span></div>`,
+    S.bypassCF ? `<div class="mc tag-cf">🔓 <span class="mv">Bypass CF Aktif</span></div>` : '',
+    `<div class="mc">🤖 <span class="mv">${S.provider}</span></div>`,
+  ].join('');
+
+  // Try inputs
+  renderTryInputs();
+}
+
+// ── Try Panel ──
+function renderTryInputs() {
+  const wrap = document.getElementById('try-inputs');
+  wrap.innerHTML = S.trySchema.map(f => `
+    <div class="field-group">
+      <label class="field-label">${f.label}${f.required ? ' *' : ' (opsional)'}</label>
+      <input class="inp" id="try-${f.name}" type="${f.type || 'text'}"
+        placeholder="${f.placeholder}" ${f.required ? 'required' : ''}/>
+    </div>
+  `).join('');
+}
+
+function toggleTry() {
+  const panel = document.getElementById('try-panel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) {
+    // Reset debugger state saat panel dibuka
+    document.getElementById('ai-debugger').classList.add('hidden');
+    document.getElementById('try-result').classList.add('hidden', 'success', 'error');
+  }
+}
+
+// ── State debugger ──
+const DBG = { fixMode: 'auto', fixedCode: '', lastError: '', hasHistory: false };
+
+function setFixMode(mode, btn) {
+  DBG.fixMode = mode;
+  document.querySelectorAll('.fix-mode-btn').forEach(b => b.classList.remove('fmact'));
+  btn.classList.add('fmact');
+}
+
+// ── Run Try Request ──
+async function runTry() {
+  const body = {};
+  S.trySchema.forEach(f => {
+    const val = document.getElementById(`try-${f.name}`)?.value.trim();
+    if (val) body[f.name] = val;
+  });
+
+  const resultEl = document.getElementById('try-result');
+  const debugEl  = document.getElementById('ai-debugger');
+  resultEl.classList.remove('hidden', 'success', 'error');
+  resultEl.textContent = '⏳ Menjalankan try request...';
+  debugEl.classList.add('hidden');
+
+  const btn = document.getElementById('btn-run-try');
+  btn.disabled = true; btn.textContent = '⏳ Loading...';
+
+  try {
+    const res  = await fetch(`/api/scraper/${S.scraperId}/try`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+
+    if (res.ok) {
+      resultEl.textContent = JSON.stringify(data, null, 2);
+      resultEl.classList.add('success');
+      showToast('✅ Try berhasil!', 'ok');
+      // Sembunyikan debugger jika sebelumnya error
+      debugEl.classList.add('hidden');
+    } else {
+      // Ada error → tampilkan AI debugger
+      const errMsg = data.error || JSON.stringify(data);
+      resultEl.textContent = '❌ Error Response:
+' + JSON.stringify(data, null, 2);
+      resultEl.classList.add('error');
+      DBG.lastError = errMsg;
+      showDebugger(errMsg);
+    }
+  } catch(e) {
+    resultEl.textContent = '❌ Network/Runtime Error:
+' + e.message;
+    resultEl.classList.add('error');
+    DBG.lastError = e.message;
+    showDebugger(e.message);
+    showToast('❌ Error terdeteksi — AI Debugger aktif!', 'err');
+  }
+
+  btn.disabled = false; btn.textContent = '▶ Jalankan Try';
+}
+
+// ── Show AI Debugger ──
+function showDebugger(errorMsg) {
+  const debugEl = document.getElementById('ai-debugger');
+  debugEl.classList.remove('hidden');
+
+  // Tampilkan analisa placeholder dulu
+  const analysisEl = document.getElementById('error-analysis');
+  analysisEl.innerHTML = `
+    <div class="arow">
+      <div class="albl">Error</div>
+      <div class="aval err">${escHtml(errorMsg.substring(0, 200))}</div>
+    </div>
+    <div class="arow">
+      <div class="albl">Status</div>
+      <div class="aval" style="color:var(--warn)">⚠️ Siap diperbaiki — pilih mode fix di bawah lalu klik Fix</div>
+    </div>`;
+
+  document.getElementById('fix-result-wrap').classList.add('hidden');
+  debugEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  showToast('🤖 AI Debugger aktif — klik Fix!', 'info');
+}
+
+// ── Run AI Auto-Fix ──
+async function runAutoFix() {
+  const btn = document.getElementById('btn-autofix');
+  btn.disabled = true; btn.textContent = '⏳ AI sedang analisa & fix...';
+
+  const analysisEl = document.getElementById('error-analysis');
+  analysisEl.innerHTML = `<div class="arow"><div class="albl">Status</div>
+    <div class="aval" style="color:var(--neon2)">🤖 AI sedang menganalisa error dan menulis ulang kode...</div></div>`;
+
+  try {
+    const res  = await fetch(`/api/scraper/${S.scraperId}/fix`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        errorMessage: DBG.lastError,
+        provider:     S.provider,
+        apiKey:       S.apiKey,
+        model:        S.model,
+        fixMode:      DBG.fixMode,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gagal fix');
+
+    // Tampilkan analisa hasil
+    const a = data.analysis || {};
+    const sevClass = `sev-${(a.severity || 'medium').toLowerCase()}`;
+    analysisEl.innerHTML = `
+      <div class="arow"><div class="albl">Error Type</div>
+        <div class="aval err">${escHtml(a.error_type || 'Unknown')}</div></div>
+      <div class="arow"><div class="albl">Root Cause</div>
+        <div class="aval err">${escHtml(a.root_cause || '-')}</div></div>
+      <div class="arow"><div class="albl">Strategi</div>
+        <div class="aval fix">${escHtml(a.fix_strategy || '-')}</div></div>
+      <div class="arow"><div class="albl">Severity</div>
+        <div class="aval"><span class="${sevClass}">${a.severity || 'medium'}</span></div></div>
+      ${a.changes?.length ? `<div class="arow"><div class="albl">Changes</div>
+        <div class="aval fix">${a.changes.map(c => '• ' + escHtml(c)).join('<br/>')}</div></div>` : ''}`;
+
+    // Simpan fixed code
+    DBG.fixedCode = data.fixedCode;
+    S.code = data.fixedCode; // preview di code block utama juga update
+
+    // Tampilkan diff + kode hasil fix
+    const diff = data.diff || {};
+    document.getElementById('diff-bar').innerHTML = `
+      <div class="diff-stat">Mode: <span>${DBG.fixMode}</span></div>
+      <div class="diff-stat">Asli: <span>${diff.originalLines || 0} baris</span></div>
+      <div class="diff-stat">Fixed: <span>${diff.fixedLines || 0} baris</span></div>
+      <div class="diff-stat">Perubahan: <span>${diff.summary || '-'}</span></div>`;
+
+    document.getElementById('fixed-code-pre').textContent = data.fixedCode;
+    document.getElementById('fix-result-wrap').classList.remove('hidden');
+    document.getElementById('btn-apply-fix').disabled = false;
+
+    // Cek apakah ada history untuk revert
+    const histRes = await fetch(`/api/scraper/${S.scraperId}/history`);
+    const histData = await histRes.json();
+    DBG.hasHistory = (histData.versions || 0) > 1;
+    document.getElementById('btn-revert-fix').disabled = !DBG.hasHistory;
+
+    showToast('✅ Kode berhasil difix! Klik Apply untuk terapkan.', 'ok');
+  } catch(e) {
+    analysisEl.innerHTML = `<div class="arow"><div class="albl">Error</div>
+      <div class="aval err">❌ Gagal fix: ${escHtml(e.message)}</div></div>`;
+    showToast('❌ ' + e.message, 'err');
+  }
+
+  btn.disabled = false; btn.textContent = '🤖 Fix dengan AI Sekarang';
+}
+
+// ── Apply Fix ke Registry ──
+async function applyFix() {
+  if (!DBG.fixedCode) return showToast('Belum ada kode yang difix!', 'err');
+  const btn = document.getElementById('btn-apply-fix');
+  btn.disabled = true; btn.textContent = '⏳ Applying...';
+
+  try {
+    const res  = await fetch(`/api/scraper/${S.scraperId}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fixedCode:  DBG.fixedCode,
+        changeLog: `Auto-fix (${DBG.fixMode}) — error: ${DBG.lastError.substring(0, 100)}`,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+
+    // Update kode di UI utama
+    S.code = DBG.fixedCode;
+    document.getElementById('code-output').textContent = DBG.fixedCode;
+
+    // Update meta chips
+    const metaEl = document.getElementById('result-meta');
+    // tambahkan fix badge
+    if (!document.getElementById('fix-badge')) {
+      const chip = document.createElement('div');
+      chip.id = 'fix-badge';
+      chip.className = 'mc';
+      chip.innerHTML = `🔧 <span class="mv">Fix #${data.fixCount}</span>`;
+      metaEl.appendChild(chip);
+    } else {
+      document.getElementById('fix-badge').innerHTML = `🔧 <span class="mv">Fix #${data.fixCount}</span>`;
+    }
+
+    document.getElementById('btn-revert-fix').disabled = false;
+    DBG.hasHistory = true;
+    showToast(`✅ ${data.message}`, 'ok');
+    document.getElementById('fix-result-wrap').classList.add('hidden');
+    document.getElementById('ai-debugger').classList.add('hidden');
+    document.getElementById('try-result').textContent = '✅ Kode sudah diupdate — coba run Try lagi!';
+    document.getElementById('try-result').classList.remove('hidden','error');
+    document.getElementById('try-result').classList.add('success');
+  } catch(e) {
+    showToast('❌ ' + e.message, 'err');
+  }
+  btn.disabled = false; btn.textContent = '✅ Apply — Terapkan ke Scraper';
+}
+
+// ── Revert ke Versi Sebelumnya ──
+async function revertCode() {
+  if (!confirm('Kembalikan ke versi kode sebelumnya?')) return;
+  try {
+    const res  = await fetch(`/api/scraper/${S.scraperId}/revert`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+
+    // Reload kode dari server
+    const sr = await fetch(`/api/scraper/${S.scraperId}`);
+    const sd = await sr.json();
+    if (sd.scraper) {
+      S.code = sd.scraper.code;
+      document.getElementById('code-output').textContent = sd.scraper.code;
+    }
+    showToast(`↩ ${data.message}`, 'info');
+    document.getElementById('ai-debugger').classList.add('hidden');
+  } catch(e) {
+    showToast('❌ ' + e.message, 'err');
+  }
+}
+
+// ── Discard Fix ──
+function discardFix() {
+  DBG.fixedCode = '';
+  document.getElementById('fix-result-wrap').classList.add('hidden');
+  showToast('Fix dibuang', 'info');
+}
+
+// ── Copy Fixed Code ──
+function copyFixedCode() {
+  if (DBG.fixedCode) {
+    navigator.clipboard.writeText(DBG.fixedCode);
+    showToast('✓ Kode fixed disalin!', 'ok');
+  }
+}
+
+// ── Manual Edit dengan AI ──
+function toggleEditBox() {
+  const box = document.getElementById('edit-box');
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
+async function runEdit() {
+  const instruction = document.getElementById('edit-instruction').value.trim();
+  if (!instruction) return showToast('Masukkan instruksi edit dulu!', 'err');
+
+  const btn = document.querySelector('#edit-box .btn-primary');
+  btn.disabled = true; btn.textContent = '⏳ AI sedang edit...';
+
+  try {
+    const res  = await fetch(`/api/scraper/${S.scraperId}/edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instruction,
+        provider: S.provider,
+        apiKey:   S.apiKey,
+        model:    S.model,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+
+    // Simpan sebagai fixedCode untuk di-apply
+    DBG.fixedCode = data.editedCode;
+    DBG.lastError = `Manual edit: ${instruction}`;
+
+    // Tampilkan di fix result
+    document.getElementById('fixed-code-pre').textContent = data.editedCode;
+    document.getElementById('diff-bar').innerHTML = `
+      <div class="diff-stat">Mode: <span>Manual Edit</span></div>
+      <div class="diff-stat">Instruksi: <span>${escHtml(instruction.substring(0,60))}</span></div>`;
+    document.getElementById('fix-result-wrap').classList.remove('hidden');
+    document.getElementById('ai-debugger').classList.remove('hidden');
+    document.getElementById('btn-apply-fix').disabled = false;
+
+    document.getElementById('edit-instruction').value = '';
+    toggleEditBox();
+    showToast('✅ Edit selesai! Klik Apply untuk terapkan.', 'ok');
+  } catch(e) {
+    showToast('❌ ' + e.message, 'err');
+  }
+  btn.disabled = false; btn.textContent = '✏️ Terapkan Edit';
+}
+
+// ── Load Version History ──
+async function loadHistory() {
+  const histWrap = document.getElementById('version-history');
+  histWrap.style.display = histWrap.style.display === 'none' ? 'block' : 'none';
+  if (histWrap.style.display === 'none') return;
+
+  try {
+    const res  = await fetch(`/api/scraper/${S.scraperId}/history`);
+    const data = await res.json();
+    const listEl = document.getElementById('history-list');
+    if (!data.history?.length) {
+      listEl.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:12px">Belum ada history — history dibuat setiap kali Apply fix.</div>';
+      return;
+    }
+    listEl.innerHTML = `
+      <div class="history-row" style="border-color:rgba(46,255,168,.2)">
+        <div class="history-ver" style="color:var(--neon)">v${data.current.version} ★</div>
+        <div class="history-info">Versi saat ini · ${new Date(data.current.updatedAt).toLocaleString('id-ID')}</div>
+        <div class="history-lines">${data.current.lines} baris</div>
+      </div>
+      ${data.history.slice().reverse().map(h => `
+        <div class="history-row">
+          <div class="history-ver">v${h.version}</div>
+          <div class="history-info">${escHtml(h.changeLog || 'Fix applied')} · ${new Date(h.savedAt).toLocaleString('id-ID')}</div>
+          <div class="history-lines">${h.lines} baris</div>
+          <button class="btn-hist-revert" onclick="revertToVersion(${h.version})">↩ Revert</button>
+        </div>`).join('')}`;
+  } catch(e) {
+    showToast('❌ ' + e.message, 'err');
+  }
+}
+
+async function revertToVersion(version) {
+  if (!confirm(`Revert ke versi v${version}?`)) return;
+  try {
+    const res  = await fetch(`/api/scraper/${S.scraperId}/revert`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const sr = await fetch(`/api/scraper/${S.scraperId}`);
+    const sd = await sr.json();
+    if (sd.scraper) { S.code = sd.scraper.code; document.getElementById('code-output').textContent = sd.scraper.code; }
+    showToast(`↩ ${data.message}`, 'info');
+    loadHistory();
+  } catch(e) {
+    showToast('❌ ' + e.message, 'err');
+  }
+}
+
+// ── Escape HTML helper ──
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Download ──
+function copyCode() {
+  navigator.clipboard.writeText(S.code);
+  const tag = document.getElementById('copied-tag');
+  tag.classList.remove('hidden');
+  setTimeout(() => tag.classList.add('hidden'), 2200);
+  showToast('✓ Kode disalin!', 'ok');
+}
+
+function downloadFile() {
+  const li = LANG_INFO[S.lang];
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([S.code], { type:'text/plain' }));
+  a.download = li.file;
+  a.click();
+}
+
+async function downloadZip() {
+  const btn = document.getElementById('btn-zip');
+  btn.textContent = '⏳...';
+  btn.disabled = true;
+  showToast('📦 Membuat ZIP...', 'info');
+
+  try {
+    // Load JSZip dynamically
+    if (!window.JSZip) {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+
+    const li    = LANG_INFO[S.lang];
+    const site  = getSiteName();
+    const zip   = new JSZip();
+    const folder = zip.folder(`SmartScrapeAI-${site}`);
+
+    folder.file(li.file, S.code);
+    folder.file('README.md',  buildReadme());
+    folder.file('run.sh',     buildRunSh());
+    folder.file('.env.example','# Tambahkan konfigurasi API key jika diperlukan\nTARGET_URL=' + S.url);
+
+    if (S.lang === 'nodejs') {
+      folder.file('package.json', JSON.stringify({
+        name: `scraper-${site.replace(/\./g,'-')}`,
+        version: '1.0.0',
+        description: `SmartScrapeAI scraper untuk ${site}`,
+        main: 'scraper.js',
+        scripts: { start: 'node scraper.js' },
+        dependencies: S.bypassCF
+          ? { 'puppeteer-extra':'^3.3.6','puppeteer-extra-plugin-stealth':'^2.11.2','puppeteer':'^21.0.0','axios':'^1.6.0','cheerio':'^1.0.0-rc.12','user-agents':'^1.1.232' }
+          : { 'axios':'^1.6.0','cheerio':'^1.0.0-rc.12' },
+      }, null, 2));
+    }
+    if (S.lang === 'python') {
+      folder.file('requirements.txt', S.bypassCF
+        ? 'cloudscraper==1.2.71\nbeautifulsoup4==4.12.2\nlxml==4.9.3\nfake-useragent==1.4.0\nrequests==2.31.0\n'
+        : 'requests==2.31.0\nbeautifulsoup4==4.12.2\nlxml==4.9.3\n');
+    }
+    if (S.lang === 'php') {
+      folder.file('composer.json', JSON.stringify({
+        name: `smartscrape/${site.replace(/\./g,'-')}`,
+        require: { php:'>=7.4','guzzlehttp/guzzle':'^7.0' },
+      }, null, 2));
+    }
+
+    const blob = await zip.generateAsync({ type:'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `SmartScrapeAI-${site}.zip`;
+    a.click();
+    showToast('✅ ZIP berhasil didownload!', 'ok');
+  } catch(e) {
+    showToast('❌ Error ZIP: ' + e.message, 'err');
+  }
+
+  btn.textContent = '📦 ZIP';
+  btn.disabled = false;
+}
+
+// ── README & run.sh builder ──
+function buildReadme() {
+  const li   = LANG_INFO[S.lang];
+  const site = getSiteName();
+  return `# 🤖 SmartScrapeAI — ${site} Scraper
+> Auto-generated oleh SmartScrapeAI v2.0 powered by ${S.provider} AI
+
+## 📋 Info
+- **URL Target:** ${S.url}
+- **Target Scrape:** ${S.target}
+- **Bahasa:** ${li.label}
+- **Mode Bypass CF:** ${S.bypassCF ? '✅ AKTIF' : '❌ Tidak aktif'}
+- **AI Provider:** ${S.provider}
+
+---
+
+## 📱 Cara Run di Termux (Android)
+
+### 1. Install Termux
+Download dari F-Droid: https://f-droid.org/en/packages/com.termux/
+
+### 2. Update Termux
+\`\`\`bash
+pkg update && pkg upgrade -y
+pkg install -y git curl wget
+\`\`\`
+
+${S.lang === 'nodejs' ? `### 3. Install Node.js
+\`\`\`bash
+pkg install -y nodejs-lts
+node --version && npm --version
+\`\`\`
+${S.bypassCF ? '\n### 4. Install Chromium (untuk Puppeteer)\n```bash\npkg install -y chromium\nexport PUPPETEER_EXECUTABLE_PATH=$(which chromium-browser)\n```\n' : ''}
+### 4. Install Dependencies & Jalankan
+\`\`\`bash
+bash run.sh
+\`\`\`` : ''}
+
+${S.lang === 'python' ? `### 3. Install Python
+\`\`\`bash
+pkg install -y python python-pip
+\`\`\`
+
+### 4. Install Dependencies & Jalankan
+\`\`\`bash
+bash run.sh
+\`\`\`` : ''}
+
+${S.lang === 'php' ? `### 3. Install PHP + Composer
+\`\`\`bash
+pkg install -y php
+curl -sS https://getcomposer.org/installer | php
+mv composer.phar /usr/local/bin/composer
+\`\`\`
+
+### 4. Install Dependencies & Jalankan
+\`\`\`bash
+bash run.sh
+\`\`\`` : ''}
+
+---
+
+## 💡 Cara Run Manual
+\`\`\`bash
+${li.install}
+${li.run}
+\`\`\`
+
+---
+*Generated by SmartScrapeAI v2.0*
+`;
+}
+
+function buildRunSh() {
+  const li = LANG_INFO[S.lang];
+  return `#!/bin/bash
+# SmartScrapeAI — Auto Run Script
+echo "🤖 SmartScrapeAI Scraper"
+echo "========================"
+${S.lang === 'nodejs' ? `
+command -v node &>/dev/null || { echo "❌ Node.js tidak ada. Jalankan: pkg install nodejs-lts"; exit 1; }
+echo "✅ Node.js: $(node --version)"
+[ ! -d node_modules ] && echo "📦 Installing..." && npm install
+${S.bypassCF ? 'export PUPPETEER_EXECUTABLE_PATH=$(which chromium-browser 2>/dev/null || which chromium 2>/dev/null)' : ''}
+echo "🚀 Menjalankan..."
+node scraper.js` : ''}
+${S.lang === 'python' ? `
+command -v python3 &>/dev/null || { echo "❌ Python3 tidak ada. Jalankan: pkg install python"; exit 1; }
+echo "✅ Python: $(python3 --version)"
+[ ! -f .deps_ok ] && pip3 install -r requirements.txt && touch .deps_ok
+echo "🚀 Menjalankan..."
+python3 scraper.py` : ''}
+${S.lang === 'php' ? `
+command -v php &>/dev/null || { echo "❌ PHP tidak ada. Jalankan: pkg install php"; exit 1; }
+echo "✅ PHP: $(php --version | head -1)"
+[ ! -d vendor ] && composer install
+echo "🚀 Menjalankan..."
+php scraper.php` : ''}
+echo "✅ Selesai!"
+`;
+}
+
+// ── Helpers ──
+function getSiteName() {
+  try { return new URL(S.url).hostname.replace('www.',''); }
+  catch { return S.url || 'site'; }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function backToLang() {
+  document.getElementById('card-result').classList.add('hidden');
+  S.step = 4; renderStepBar();
+}
+
+function resetAll() {
+  Object.assign(S, { step:0, firewall:null, bypassCF:false, target:'', code:'', scraperId:'', trySchema:[], msgs:[] });
+  document.getElementById('inp-url').disabled = false;
+  document.getElementById('inp-apikey').disabled = false;
+  document.getElementById('card-setup').querySelector('.btn-primary').disabled = false;
+  ['card-chat','card-lang','card-result'].forEach(id => document.getElementById(id).classList.add('hidden'));
+  document.getElementById('bypass-row').classList.add('hidden');
+  document.getElementById('custom-target-row').classList.add('hidden');
+  document.getElementById('chat-scroll').innerHTML = '';
+  document.getElementById('fw-badges').innerHTML = '';
+  document.getElementById('try-panel').classList.add('hidden');
+  document.getElementById('try-result').classList.add('hidden');
+  const cfNotice = document.getElementById('cf-lang-notice');
+  if (cfNotice) cfNotice.classList.add('hidden');
+  document.querySelectorAll('.lbtn').forEach((b,i) => { b.classList.toggle('lact', i===0); });
+  S.lang = 'nodejs';
+  const genBtn = document.getElementById('btn-generate');
+  if (genBtn) { genBtn.disabled = false; genBtn.textContent = '⚡ Generate Kode Node.js'; }
+  renderStepBar();
+  showToast('↺ Reset berhasil', 'info');
+}
+
+// ── Scrapers Tab ──
+async function loadScrapers() {
+  const el = document.getElementById('scrapers-list');
+  el.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:12px">⏳ Memuat...</div>';
+  try {
+    const res  = await fetch('/api/scrapers');
+    const data = await res.json();
+    if (!data.scrapers?.length) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-ico">📭</div><div class="empty-txt">Belum ada scraper tersimpan.<br/>Generate scraper dulu di tab "Generate".</div></div>`;
+      return;
+    }
+    el.innerHTML = data.scrapers.map(s => `
+      <div class="scraper-card">
+        <div class="sc-info">
+          <div class="sc-name">${s.name}</div>
+          <div class="sc-target">🎯 ${s.target}</div>
+          <div class="sc-meta">
+            <span class="sc-tag">💻 ${s.lang}</span>
+            <span class="sc-tag">🌐 ${new URL(s.url).hostname}</span>
+            ${s.bypassCF ? '<span class="sc-tag" style="color:var(--warn)">🔓 CF Bypass</span>' : ''}
+            <span class="sc-tag">🤖 ${s.provider}</span>
+            <span class="sc-tag" style="font-size:9px">${new Date(s.createdAt).toLocaleString('id-ID')}</span>
+          </div>
+        </div>
+        <div class="sc-acts">
+          <a href="/api/scraper/${s.id}/download" class="btn-ico d" style="text-decoration:none;font-size:10.5px">⬇ Download</a>
+          <button class="btn-ico t" onclick="viewScraper('${s.id}')">👁 Lihat</button>
+          <button class="btn-ico" style="color:var(--danger);border-color:rgba(255,69,96,.2)"
+            onclick="deleteScraper('${s.id}',this)">🗑</button>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) {
+    el.innerHTML = `<div style="color:var(--danger)">❌ Error: ${e.message}</div>`;
+  }
+}
+
+async function deleteScraper(id, btn) {
+  btn.disabled = true;
+  await fetch(`/api/scraper/${id}`, { method:'DELETE' });
+  showToast('🗑️ Scraper dihapus', 'info');
+  loadScrapers();
+}
+
+async function viewScraper(id) {
+  const res  = await fetch(`/api/scraper/${id}`);
+  const data = await res.json();
+  if (!data.scraper) return;
+  const s = data.scraper;
+  alert(`📄 ${s.name}\n🎯 Target: ${s.target}\n💻 Lang: ${s.lang}\n🌐 URL: ${s.url}\n\nKode:\n${s.code.substring(0,300)}...`);
+}
+
+// ── API Docs Tab ──
+async function loadApiDocs() {
+  const el = document.getElementById('apidocs-body');
+  el.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:12px">⏳ Memuat docs...</div>';
+  try {
+    const res  = await fetch('/api/docs');
+    const data = await res.json();
+    el.innerHTML = `
+      <div class="docs-section">
+        <div style="margin-bottom:16px">
+          <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:6px">BASE URL</div>
+          <code style="font-family:var(--mono);font-size:13px;color:var(--neon2)">${data.baseURL}</code>
+        </div>
+        <div class="meta-row" style="margin-bottom:20px">
+          <div class="mc">📊 <span class="mv">${data.totalEndpoints} Endpoints</span></div>
+          <div class="mc">📦 <span class="mv">${data.scrapers.length} Scrapers</span></div>
+          <div class="mc">🤖 <span class="mv">${data.providers.supported.join(', ')}</span></div>
+        </div>
+      </div>
+
+      <div class="docs-section">
+        <div class="docs-title">🔧 Built-in Endpoints</div>
+        ${data.builtinEndpoints.map(ep => `
+          <div class="endpoint-row">
+            <span class="method-badge ${ep.method}">${ep.method}</span>
+            <div>
+              <div class="ep-path">${ep.path}</div>
+              <div class="ep-desc">${ep.description}</div>
+              ${ep.body ? `<div style="margin-top:6px"><code style="font-family:var(--mono);font-size:11px;background:rgba(0,0,0,.3);padding:4px 8px;border-radius:4px;color:var(--muted)">${JSON.stringify(ep.body)}</code></div>` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      ${data.scrapers.length ? `
+      <div class="docs-section">
+        <div class="docs-title">📦 Generated Scrapers (${data.scrapers.length})</div>
+        ${data.scrapers.map(s => `
+          <div class="endpoint-row">
+            <span class="method-badge GET">GET</span>
+            <div style="flex:1">
+              <div class="ep-path">${s.endpoint}</div>
+              <div class="ep-desc">${s.name} — ${s.target}</div>
+              <div class="meta-row" style="margin-top:8px">
+                <div class="mc">💻 <span class="mv">${s.lang}</span></div>
+                <div class="mc">🌐 <span class="mv">${new URL(s.url).hostname}</span></div>
+                <a href="${s.download}" class="mc" style="color:var(--neon2);border-color:rgba(0,194,255,.25)">⬇ Download</a>
+              </div>
+              <div style="margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--muted)">
+                🧪 Try: <code style="font-size:11px;background:rgba(176,111,255,.08);border:1px solid rgba(176,111,255,.2);padding:2px 7px;border-radius:4px;color:var(--purple)">POST ${s.tryEndpoint}</code>
+                Inputs: ${s.tryInputs.map(i => `<code style="font-size:10px;background:rgba(0,0,0,.3);padding:1px 5px;border-radius:3px;color:var(--muted)">${i.name}</code>`).join(' ')}
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      ` : ''}
+    `;
+  } catch(e) {
+    el.innerHTML = `<div style="color:var(--danger)">❌ Error: ${e.message}</div>`;
+  }
+}
+
+// ── Start ──
+init();
+</script>
+</body>
+</html>
