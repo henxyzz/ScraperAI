@@ -168,7 +168,7 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
             .map((e, i) => ({
               id: `card_${i}`, source: e.source || "dom", category: e.category,
               label: e.label, selector: e.selector, itemType: (e as any).itemType || null,
-              fields: e.fields || [], rawFields: e.rawFields || [],
+              fields: (e.fields || []).map(f => ({ name: f.name, value: f.value, source: f.source || 'dom' })), rawFields: e.rawFields || [],
               preview: e.preview || [], count: e.count || 0,
               target: e.target, priority: e.priority || 0,
             }))

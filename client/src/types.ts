@@ -249,7 +249,7 @@ export interface PrefetchField {
   name:   string;
   value:  string;
   type?:  string;
-  source?: string;
+  source:  string;
 }
 
 export interface PrefetchElement {
