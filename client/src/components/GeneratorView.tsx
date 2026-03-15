@@ -3,13 +3,14 @@ import {
   Globe, Zap, Code2, CheckCircle, ArrowRight, ArrowLeft,
   RefreshCw, Wand2, Package, Shield, ShieldOff,
   Terminal, Play, Box, Cpu, Route, CheckSquare, Square, Settings2,
-  ChevronDown, ChevronUp, Activity,
+  ChevronDown, ChevronUp, Activity, Eye,
 } from "lucide-react";
 import { useStore } from "../store";
 import { generateScraper, getTemplates, installDeps, getApiRoutes, createApiRoute, deleteApiRoute, prefetchUrl, previewUrl, detectUrl } from "../api";
 import { FirewallInfo } from "./FirewallInfo";
 import { TryOutputPanel } from "./TryOutputPanel";
 import { CodeBlock } from "./CodeBlock";
+import { VisualPickerModal } from "./VisualPickerModal";
 import type { Template, Lang, ApiRoute, PrefetchElement, PrefetchResult, UrlDetectResult } from "../types";
 
 type ModuleType = "commonjs" | "esm" | "esm-ts";
@@ -46,6 +47,7 @@ export function GeneratorView() {
   const [installResult,      setInstallResult]      = useState<{success:boolean;message:string;output:string}|null>(null);
   // Store deep DOM selectors from scan to pass to generate
   const [scanSmartSelectors, setScanSmartSelectors] = useState<any[]>([]);
+  const [showVisualPicker,   setShowVisualPicker]   = useState(false);
 
   const canProceed = !!apiKey.trim();
 
@@ -229,21 +231,36 @@ export function GeneratorView() {
 
       {/* ──── STEP 0: URL ──────────────────────────────────── */}
       {genStep===0 && (
-        <Step0UrlPanel
-          genUrl={genUrl} setGenUrl={setGenUrl}
-          loadingAnalyze={loadingAnalyze}
-          canProceed={canProceed}
-          handleAnalyze={handleAnalyze}
-          loadTemplates={loadTemplates}
-          showTemplates={showTemplates}
-          templates={templates}
-          applyTemplate={applyTemplate}
-          logs={logs} showLogs={showLogs} setShowLogs={setShowLogs}
-          logRef={logRef}
-          genTarget={genTarget} setGenTarget={setGenTarget}
-          addToast={addToast}
-          onScanComplete={(selectors) => setScanSmartSelectors(selectors || [])}
-        />
+        <>
+          <Step0UrlPanel
+            genUrl={genUrl} setGenUrl={setGenUrl}
+            loadingAnalyze={loadingAnalyze}
+            canProceed={canProceed}
+            handleAnalyze={handleAnalyze}
+            loadTemplates={loadTemplates}
+            showTemplates={showTemplates}
+            templates={templates}
+            applyTemplate={applyTemplate}
+            logs={logs} showLogs={showLogs} setShowLogs={setShowLogs}
+            logRef={logRef}
+            genTarget={genTarget} setGenTarget={setGenTarget}
+            addToast={addToast}
+            onScanComplete={(selectors) => setScanSmartSelectors(selectors || [])}
+            onOpenVisualPicker={() => setShowVisualPicker(true)}
+          />
+          {showVisualPicker && genUrl && (
+            <VisualPickerModal
+              url={genUrl}
+              onClose={() => setShowVisualPicker(false)}
+              onApply={(elements) => {
+                setScanSmartSelectors(elements);
+                const target = elements.map(e => e.target).join("; ");
+                setGenTarget(target);
+                addToast("success", `${elements.length} elemen dipilih dari Visual Picker`);
+              }}
+            />
+          )}
+        </>
       )}
 
       {/* ──── STEP 1: ANALYZE RESULT ─────────────────────── */}
@@ -950,30 +967,31 @@ const CATEGORY_COLORS: Record<string,string> = {
 };
 
 const CATEGORY_LABELS: Record<string,string> = {
-  headings:       "Headings",
-  text:           "Teks",
-  links:          "Links",
-  images:         "Gambar",
-  tables:         "Tabel",
-  lists:          "List",
-  data:           "Data",
-  forms:          "Form",
-  meta:           "Meta/SEO",
-  structured:     "JSON-LD",
-  movies:         "🎬 Film/Video",
-  episodes:       "📺 Episode",
-  genres:         "🏷️ Genre",
-  latest:         "🆕 Terbaru",
-  search:         "🔍 Pencarian",
-  player:         "▶️ Player",
-  detail:         "📋 Detail",
-  pagination:     "📄 Paginasi",
-  products:       "🛍️ Produk",
-  prices:         "💰 Harga",
-  categories:     "🗂️ Kategori",
-  articles:       "📰 Artikel",
-  article_detail: "📝 Isi Artikel",
-  threads:        "💬 Thread",
+  // microdata types
+  movie:         "🎬 Movie",
+  tvseries:      "📺 TVSeries",
+  videoobject:   "▶️ Video",
+  product:       "🛍️ Product",
+  article:       "📰 Article",
+  newsarticle:   "📰 News",
+  blogposting:   "📝 Blog",
+  person:        "👤 Person",
+  organization:  "🏢 Org",
+  review:        "⭐ Review",
+  // dom groups
+  film_video:    "🎬 Film/Video",
+  produk:        "🛍️ Produk",
+  media:         "📺 Media",
+  artikel:       "📰 Artikel",
+  card:          "📦 Card",
+  // field-level
+  field:         "🔧 Field",
+  // others
+  search_form:   "🔍 Search Form",
+  pagination:    "📄 Pagination",
+  navigation:    "🗂️ Navigasi",
+  structured:    "🗄️ JSON-LD",
+  meta:          "🏷️ Meta/OG",
 };
 
 interface Step0Props {
@@ -987,13 +1005,14 @@ interface Step0Props {
   genTarget: string; setGenTarget: (t:string)=>void;
   addToast: (type:any, msg:string)=>void;
   onScanComplete?: (selectors: any[]) => void;
+  onOpenVisualPicker?: () => void;
 }
 
 function Step0UrlPanel({
   genUrl, setGenUrl, loadingAnalyze, canProceed,
   handleAnalyze, loadTemplates, showTemplates, templates, applyTemplate,
   logs, showLogs, setShowLogs, logRef,
-  genTarget, setGenTarget, addToast, onScanComplete,
+  genTarget, setGenTarget, addToast, onScanComplete, onOpenVisualPicker,
 }: Step0Props) {
   const [scanning,       setScanning]       = useState(false);
   const [scanResult,     setScanResult]     = useState<PrefetchResult|null>(null);
@@ -1208,6 +1227,18 @@ function Step0UrlPanel({
               {scanning
                 ? <><div className="spinner" style={{width:14,height:14}}/> Scanning...</>
                 : <><Box size={14}/> Scan Elemen</>}
+            </button>
+
+            {/* Visual Picker — fitur canggih */}
+            <button className="btn btn-primary"
+              onClick={() => {
+                if (!genUrl.trim()) { addToast("warn","Masukkan URL terlebih dahulu"); return; }
+                onOpenVisualPicker?.();
+              }}
+              disabled={!genUrl.trim()}
+              style={{background:"linear-gradient(135deg,rgba(0,194,255,.2),rgba(46,255,168,.2))",
+                border:"1px solid rgba(0,194,255,.5)",color:"var(--neon2)"}}>
+              <Eye size={14}/> Visual Picker
             </button>
 
             {/* Langsung analisa AI */}

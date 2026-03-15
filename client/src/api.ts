@@ -36,6 +36,11 @@ export const prefetchUrl = (url: string) =>
 export const detectUrl = (url: string) =>
   api.post<import("./types").UrlDetectResult>("/api/url-detect", { url }).then(r => r.data);
 
+export const previewHtml = (url: string) =>
+  api.post<{ success: boolean; url: string; layer: number; html: string }>(
+    "/api/preview-html", { url }, { timeout: 60000 }
+  ).then(r => r.data);
+
 export const previewUrl = (url: string) =>
   api.post<{
     success: boolean; url: string; title: string; description: string;

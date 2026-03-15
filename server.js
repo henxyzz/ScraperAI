@@ -538,90 +538,220 @@ app.post("/api/prefetch", async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: "url diperlukan" });
 
-  // Gunakan fetchWithBypass penuh (6 layer) agar bypass firewall otomatis
+  // ── 1. Auto Bypass & Fetch HTML ────────────────────────────
   const logs = [];
   const log  = (msg) => logs.push(msg);
-
   let fetchResult;
   try {
     fetchResult = await fetchWithBypass(url, log);
   } catch (e) {
-    return res.json({
-      success:  false,
-      error:    e.message || "Fetch gagal",
-      elements: [],
-      hint:     "URL tidak bisa diakses. Coba Analisa untuk info lebih lanjut.",
-    });
+    return res.json({ success: false, error: e.message, elements: [], bypass_logs: logs });
   }
-
-  const html = fetchResult?.html;
+  const html  = fetchResult?.html;
   const layer = fetchResult?.layer;
-
   if (!html) {
     return res.json({
-      success:  false,
-      error:    fetchResult?.error || "Tidak bisa fetch HTML",
-      elements: [],
-      hint:     "Semua 6 layer bypass gagal. URL mungkin memerlukan Puppeteer/browser stealth.",
-      bypass_logs: logs,
+      success: false, error: fetchResult?.error || "Tidak bisa fetch HTML",
+      elements: [], hint: "Semua 6 layer bypass gagal. URL mungkin butuh Puppeteer.", bypass_logs: logs,
     });
   }
 
-  // ── Smart parse dengan context-aware element detection ─────
+  // ── 2. Deep Raw HTML Scan — semua elemen jadi checkbox ─────
   try {
-    const $ = cheerio.load(html);
+    const $       = cheerio.load(html);
+    const baseUrl = (() => { try { const u = new URL(url); return `${u.protocol}//${u.hostname}`; } catch { return ""; } })();
+    const host    = baseUrl.replace(/https?:\/\//, "").replace("www.", "");
+    const title   = $("title").first().text().trim().substring(0, 100);
     const siteType = detectSiteType(url, $, html);
     const pageInfo = detectPageType(url);
-    const elements = detectSmartElements(url, $, html, siteType);
 
-    // Merge scraper suggestions: URL-based + site-type based
+    const allElements = [];
+
+    // ── LAYER 1: Schema.org Microdata ──────────────────────────
+    $("[itemscope]").not("[itemscope] [itemscope]").each((_, el) => {
+      if ($(el).closest("nav, header, footer").length) return;
+      const itemType = ($(el).attr("itemtype") || "").split("/").pop() || "Item";
+      const fields   = extractCardFields(el, $, baseUrl);
+      if (fields.length < 2) return;
+      const sel      = makeSelector(el, $);
+      const fv       = (n) => fields.find(f => f.name === n)?.value || "";
+      const preview  = [
+        fv("title")   ? `📌 ${fv("title")}`          : null,
+        fv("rating")  ? `⭐ ${fv("rating")}`          : null,
+        fv("year")    ? `📅 ${fv("year")}`            : null,
+        fv("quality") ? `🎬 ${fv("quality")}`         : null,
+        fv("image")   ? `🖼️ ${fv("image").substring(0,70)}` : null,
+        fv("link")    ? `🔗 ${fv("link").substring(0,70)}`  : null,
+      ].filter(Boolean);
+      allElements.push({
+        id: `micro_${allElements.length}`, source: "microdata",
+        category: itemType.toLowerCase(), label: `[${itemType}] microdata`,
+        selector: sel, itemType, fields, rawFields: fields.map(f => f.name),
+        preview, count: $(sel).not("[itemscope] [itemscope]").length || 1,
+        target: `${itemType}: ${fields.map(f=>f.name).join(", ")}`, priority: 20,
+      });
+    });
+
+    // ── LAYER 2: Repeating DOM groups ─────────────────────────
+    const usedSels = new Set(allElements.map(e => e.selector));
+    findRepeatingGroups($).forEach(group => {
+      const sel = group.sel || makeSelector(group.els[0], $);
+      if (usedSels.has(sel)) return;
+      usedSels.add(sel);
+      const sampleEls  = group.els.slice(0, 5);
+      const allFields  = sampleEls.map(el => extractCardFields(el, $, baseUrl));
+      const fc = {};
+      allFields.forEach(fs => fs.forEach(f => { fc[f.name] = (fc[f.name]||0)+1; }));
+      const consistent = Object.keys(fc)
+        .filter(fn => fc[fn] >= Math.ceil(sampleEls.length * 0.4))
+        .sort((a,b) => fc[b]-fc[a]);
+      if (consistent.length < 2) return;
+      const ff  = allFields[0] || [];
+      const fv  = (n) => ff.find(f => f.name === n)?.value || "";
+      const preview = [
+        fv("title")   ? `📌 ${fv("title")}`          : null,
+        fv("price")   ? `💰 ${fv("price")}`           : null,
+        fv("rating")  ? `⭐ ${fv("rating")}`          : null,
+        fv("year")    ? `📅 ${fv("year")}`            : null,
+        fv("quality") ? `🎬 ${fv("quality")}`         : null,
+        fv("image")   ? `🖼️ ${fv("image").substring(0,70)}` : null,
+        fv("link")    ? `🔗 ${fv("link").substring(0,70)}`  : null,
+      ].filter(Boolean);
+      [allFields[1],allFields[2]].forEach(fs => {
+        if (!fs) return;
+        const t = fs.find(f=>f.name==="title");
+        if (t && preview.length < 6) preview.push(`📌 ${t.value}`);
+      });
+      let lbl = "Card";
+      if (consistent.includes("quality")||consistent.includes("rating")) lbl = siteType==="streaming"?"Film/Video":"Media";
+      else if (consistent.includes("price")) lbl = "Produk";
+      else if (consistent.includes("date"))  lbl = "Artikel";
+      allElements.push({
+        id: `dom_${allElements.length}`, source: "dom",
+        category: lbl.toLowerCase().replace("/","_"),
+        label: `[${lbl}] ${sel} (${group.els.length}x)`,
+        selector: sel, fields: ff, rawFields: consistent, preview,
+        count: group.els.length, priority: Math.round(group.score),
+        target: `${group.els.length} ${lbl}: ${consistent.join(", ")} — selector: ${sel}`,
+      });
+    });
+
+    // ── LAYER 3: itemprop field-level checkboxes ──────────────
+    const seenProps = new Set();
+    $("[itemprop]").each((_, el) => {
+      const prop = $(el).attr("itemprop") || "";
+      if (!prop || seenProps.has(prop)) return;
+      seenProps.add(prop);
+      const tag    = el.tagName;
+      const sel    = `${tag}[itemprop="${prop}"]`;
+      const samples = [];
+      $(`[itemprop="${prop}"]`).slice(0, 3).each((_, e) => {
+        const v = $(e).text().trim() || $(e).attr("src") || $(e).attr("href") || $(e).attr("content") || "";
+        if (v) samples.push(v.substring(0, 80));
+      });
+      if (!samples.length) return;
+      allElements.push({
+        id: `itemprop_${prop}`, source: "itemprop", category: "field",
+        label: `[itemprop="${prop}"]`,
+        selector: sel, fields: [{name:prop, value:samples[0], type:"text", source:"microdata"}],
+        rawFields: [prop], preview: samples.map(s=>`${prop}: ${s}`),
+        count: $(`[itemprop="${prop}"]`).length, priority: 12,
+        target: `itemprop ${prop}: ${samples.slice(0,2).join(" | ")}`,
+      });
+    });
+
+    // ── LAYER 4: Class-based field checkboxes ─────────────────
+    const seenCls = new Set();
+    $("[class]").each((_, el) => {
+      const tag = el.tagName;
+      if (["html","body","head","script","style","noscript","nav","header","footer"].includes(tag)) return;
+      if ($(el).closest("nav,header,footer,[class*='nav'],[class*='menu']").length) return;
+      const cls = ($(el).attr("class")||"").split(/\s+/).filter(c=>c.length>2&&c.length<40&&!/^[0-9]/.test(c));
+      if (!cls.length) return;
+      const primary = cls[0];
+      if (seenCls.has(primary)) return;
+      seenCls.add(primary);
+      const sel   = `${tag}.${primary}`;
+      const count = $(sel).length;
+      if (count < 2) return;
+      const txt  = $(el).clone().children().remove().end().text().trim();
+      const img  = $(el).find("img").first().attr("src") || $(el).find("img").first().attr("data-src") || "";
+      const href = $(el).attr("href") || $(el).find("a[href]").first().attr("href") || "";
+      const val  = txt || img || href;
+      if (!val || val.length < 2 || val.length > 300) return;
+      allElements.push({
+        id: `cls_${primary}`, source: "class", category: "field",
+        label: `.${primary}  (${count}x)`,
+        selector: sel, fields:[{name:primary,value:val.substring(0,100),type:img?"url":href?"url":"text",source:"class"}],
+        rawFields:[primary], preview:[`${sel}: ${val.substring(0,80)}`],
+        count, priority: count > 5 ? 8 : 5,
+        target: `${sel} (${count}x): ${val.substring(0,80)}`,
+      });
+    });
+
+    // ── LAYER 5: Search form ──────────────────────────────────
+    $("form").each((_, form) => {
+      const si = $(form).find("input[type='search'],input[name='s'],input[name='q'],input[name*='search'],input[placeholder*='cari'],input[placeholder*='search']").first();
+      if (!si.length) return;
+      const action = $(form).attr("action") || "";
+      const param  = si.attr("name") || "q";
+      allElements.push({
+        id: `form_search`, source: "form", category: "search_form",
+        label: `[Form Search] action="${action}" param="${param}"`,
+        selector: action ? `form[action="${action}"]` : "form",
+        fields:[{name:param,value:action,type:"url",source:"form"}],
+        rawFields:[param], preview:[`Search → ${action||"(halaman ini)"}`, `Param: ${param}`],
+        count:1, priority:9,
+        target: `form pencarian: kirim ke "${action||url}" param ${param}, scrape hasil`,
+      });
+    });
+
+    // ── LAYER 6: Pagination ───────────────────────────────────
+    const nextHref = $("a[rel='next']").first().attr("href") ||
+      $("a").filter((_,a) => /next|selanjutnya|»/i.test($(a).text().trim())).first().attr("href") || "";
+    if (nextHref) {
+      allElements.push({
+        id: "pagination", source: "pagination", category: "pagination",
+        label: `[Pagination] next → ${nextHref.substring(0,60)}`,
+        selector: "a[rel='next']",
+        fields:[{name:"next_url",value:nextHref,type:"url",source:"dom"}],
+        rawFields:["next_url"], preview:[`Next: ${nextHref}`],
+        count:1, priority:6,
+        target: `auto-follow pagination: "${nextHref}"`,
+      });
+    }
+
+    // ── Sort & dedup ──────────────────────────────────────────
+    const seen = new Set();
+    const elements = allElements
+      .sort((a,b) => (b.priority||0)-(a.priority||0))
+      .filter(e => { const k=`${e.source}::${e.selector}`; if(seen.has(k))return false; seen.add(k); return true; });
+
+    // Suggestions
     const siteSuggestions = getScraperSuggestions(siteType, elements);
     const urlSuggestions  = pageInfo.suggestions || [];
-    // URL-based suggestions are more specific — put them first
     const allSuggestions  = [
       ...urlSuggestions,
       ...siteSuggestions.filter(s => !urlSuggestions.some(u => u.label === s.label)),
     ].slice(0, 8);
 
-    const host  = (() => { try { return new URL(url).hostname.replace("www.", ""); } catch { return url; } })();
-    const title = (() => { try { return $("title").first().text().trim().substring(0, 100); } catch { return ""; } })();
-
     const smartSelectors = elements
-      .filter(e => e.selector && e.selector !== "meta" && e.selector !== "script[type='application/ld+json']")
-      .slice(0, 6)
-      .map(e => ({
-        category:  e.category,
-        selector:  e.selector,
-        label:     e.label,
-        count:     e.count,
-        fields:    e.fields    || [],
-        rawFields: e.rawFields || [],
-        priority:  e.priority  || 0,
-      }));
+      .filter(e => !["field","pagination"].includes(e.source))
+      .slice(0, 8)
+      .map(e => ({ category:e.category, selector:e.selector, label:e.label, count:e.count,
+        fields:e.fields||[], rawFields:e.rawFields||[], priority:e.priority||0,
+        source:e.source, itemType:e.itemType||null }));
 
     res.json({
-      success:            true,
-      url,
-      host,
-      title,
-      layer,
-      siteType,
-      pageType:           pageInfo.pageType,
-      platform:           pageInfo.platform || null,
-      pageHint:           pageInfo.hint || null,
-      searchQuery:        pageInfo.searchQuery || null,
-      scraperSuggestions: allSuggestions,
-      smartSelectors,
-      elementCount:       elements.reduce((a, e) => a + e.count, 0),
-      categories:         [...new Set(elements.map(e => e.category))],
-      elements,
+      success:true, url, host, title, layer, siteType,
+      pageType:pageInfo.pageType, platform:pageInfo.platform||null,
+      pageHint:pageInfo.hint||null, searchQuery:pageInfo.searchQuery||null,
+      scraperSuggestions:allSuggestions, smartSelectors,
+      elementCount:elements.length, categories:[...new Set(elements.map(e=>e.category))],
+      elements, bypass_logs:logs,
     });
   } catch (parseErr) {
-    res.json({
-      success: false,
-      error:   `Parse error: ${parseErr.message}`,
-      elements: [],
-    });
+    res.json({ success:false, error:`Parse error: ${parseErr.message}`, elements:[] });
   }
 });
 
@@ -1674,6 +1804,150 @@ function getScraperSuggestions(siteType, elements) {
   return suggestions.slice(0, 8);
 }
 
+
+// ══════════════════════════════════════════════════════════════
+//  POST /api/preview-html  —  Visual Element Picker
+//  Fetch HTML bypass → rewrite URLs → inject picker script
+// ══════════════════════════════════════════════════════════════
+app.post("/api/preview-html", async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: "url diperlukan" });
+
+  let fetchResult;
+  try { fetchResult = await fetchWithBypass(url, () => {}); }
+  catch (e) { return res.status(500).json({ error: `Fetch gagal: ${e.message}` }); }
+  if (!fetchResult?.html) {
+    return res.status(500).json({ error: fetchResult?.error || "HTML tidak bisa diambil." });
+  }
+
+  let html = fetchResult.html;
+
+  // Tambah base tag supaya resource relative load
+  if (!html.includes("<base")) {
+    html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${url}">`);
+    if (!html.includes("<base")) html = `<html><head><base href="${url}"></head><body>${html}</body></html>`;
+  }
+
+  // Hapus script (biarkan JSON-LD)
+  html = html.replace(/<script(?![^>]*application\/ld\+json)[^>]*>[\s\S]*?<\/script>/gi, "");
+  html = html.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "");
+
+  // Inject visual picker
+  const PICKER = `
+<style>
+.__sai_hover{outline:2px solid #00c2ff!important;outline-offset:1px!important;cursor:crosshair!important;background-color:rgba(0,194,255,.08)!important}
+.__sai_selected{outline:3px solid #2effa8!important;background-color:rgba(46,255,168,.12)!important}
+#__sai_badge{position:fixed;top:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.92);color:#2effa8;border:1px solid #2effa8;padding:6px 14px;border-radius:8px;font:11px/1.5 monospace;z-index:2147483647;pointer-events:none;white-space:nowrap;display:none}
+#__sai_bar{position:fixed;bottom:0;left:0;right:0;z-index:2147483647;background:rgba(0,0,0,.95);border-top:1px solid #2effa8;padding:8px 14px;display:flex;align-items:center;gap:10px;font:11px monospace;color:#aaa}
+#__sai_bar button{background:#2effa8;color:#000;border:none;padding:4px 12px;border-radius:5px;cursor:pointer;font:700 11px monospace}
+#__sai_bar .d{background:#ff4560;color:#fff}
+</style>
+<div id="__sai_badge"></div>
+<div id="__sai_bar">
+  <span>🎯 Visual Picker</span>
+  <span>Dipilih: <b id="__sai_cnt">0</b></span>
+  <button onclick="__done()">✅ Selesai</button>
+  <button class="d" onclick="__clear()">🗑 Clear</button>
+</div>
+<script>
+(function(){
+'use strict';
+var sel=[], hov=null;
+var IGN=['html','body','head','script','style','noscript','#document'];
+function bSel(el){
+  if(!el||el.nodeType!==1)return null;
+  var t=el.tagName.toLowerCase();
+  if(IGN.includes(t))return null;
+  if(el.id&&!/^[0-9]/.test(el.id))return '#'+el.id;
+  var ip=el.getAttribute('itemprop');
+  if(ip)return t+'[itemprop="'+ip+'"]';
+  var cls=Array.from(el.classList||[]).filter(function(c){return c.length>1&&c.length<40&&!/^[0-9]/.test(c)});
+  if(cls.length)return t+'.'+cls.slice(0,2).join('.');
+  var it=el.getAttribute('itemtype');
+  if(it)return t+'[itemscope]';
+  return t;
+}
+function exF(el){
+  var f=[],seen={};
+  function add(n,v,s){if(!n||!v||seen[n])return;seen[n]=1;f.push({name:n,value:String(v).substring(0,200),source:s});}
+  var props=el.querySelectorAll('[itemprop]');
+  props.forEach(function(c){var p=c.getAttribute('itemprop');var v=c.textContent.trim()||c.getAttribute('src')||c.getAttribute('href')||c.getAttribute('content')||'';if(p&&v)add(p,v,'microdata');});
+  var h=el.querySelector('h1,h2,h3,h4,h5');if(h)add('title',h.textContent.trim(),'dom');
+  var a=el.querySelector('a[href]');if(a)add('link',a.href||a.getAttribute('href'),'dom');
+  var img=el.querySelector('img');
+  if(img){var src=img.src||img.getAttribute('data-src')||img.getAttribute('data-lazy')||img.getAttribute('data-original')||'';if(src&&src.indexOf('data:')<0)add('image',src,'dom');}
+  Array.from(el.attributes||[]).forEach(function(a){if(a.name.startsWith('data-')&&a.value&&a.value.length<200)add(a.name.replace('data-','').replace(/-/g,'_'),a.value,'data-attr');});
+  el.querySelectorAll('span,div,p,strong').forEach(function(sp){
+    var t=sp.textContent.trim();
+    if(!seen.rating&&/^\\d[.,]\\d$/.test(t))add('rating',t,'pattern');
+    if(!seen.year&&/^(19|20)\\d{2}$/.test(t))add('year',t,'pattern');
+    if(!seen.quality&&/^(HD|FHD|4K|720p|1080p|BLURAY|WEB-DL|WEBRIP)$/i.test(t))add('quality',t,'pattern');
+    if(!seen.price&&/^(Rp|\\$)?[\\d.,]+\\s*(rb|jt|k)?$/i.test(t))add('price',t,'pattern');
+  });
+  if(!f.length){var tx=el.textContent.trim().substring(0,100);if(tx)add('text',tx,'dom');}
+  return f;
+}
+function getIT(el){var it=el.getAttribute&&el.getAttribute('itemtype');return it?it.split('/').pop():'';}
+function updBadge(el){
+  var b=document.getElementById('__sai_badge');if(!b)return;
+  var s=bSel(el)||el.tagName.toLowerCase();
+  var n=0;try{n=document.querySelectorAll(s).length;}catch(e){}
+  var it=getIT(el);
+  b.style.display='block';b.textContent=(it?'['+it+'] ':'')+s+' ('+n+'x)';
+}
+function onOver(e){
+  var el=e.target;if(!el||IGN.includes((el.tagName||'').toLowerCase()))return;
+  if(hov&&hov!==el)hov.classList.remove('__sai_hover');
+  hov=el;el.classList.add('__sai_hover');updBadge(el);e.stopPropagation();
+}
+function onOut(e){
+  var el=e.target;if(el&&!el.classList.contains('__sai_selected'))el.classList.remove('__sai_hover');
+  var b=document.getElementById('__sai_badge');if(b)b.style.display='none';
+}
+function onClick(e){
+  e.preventDefault();e.stopPropagation();
+  var el=e.target;if(!el||IGN.includes((el.tagName||'').toLowerCase()))return;
+  var s=bSel(el);if(!s)return;
+  var fields=exF(el);
+  var cnt=0;try{cnt=document.querySelectorAll(s).length;}catch(ex){}
+  var it=getIT(el);
+  var idx=sel.findIndex(function(x){return x.selector===s;});
+  if(idx>=0){
+    sel.splice(idx,1);
+    document.querySelectorAll('.__sai_selected').forEach(function(x){
+      if(bSel(x)===s)x.classList.remove('__sai_selected','__sai_hover');
+    });
+  } else {
+    sel.push({id:'v_'+Date.now(),source:it?'microdata':'visual',category:it?it.toLowerCase():(el.tagName||'div').toLowerCase(),
+      label:(it?'['+it+'] ':'')+s+' ('+cnt+'x)',selector:s,itemType:it||null,
+      fields:fields,rawFields:fields.map(function(f){return f.name;}),
+      preview:fields.slice(0,4).map(function(f){return f.name+': '+f.value.substring(0,60);}),
+      count:cnt,target:s+' ('+cnt+'x): '+fields.map(function(f){return f.name;}).join(', '),priority:it?20:15});
+    try{document.querySelectorAll(s).forEach(function(x){x.classList.add('__sai_selected');});}catch(ex){}
+  }
+  document.getElementById('__sai_cnt').textContent=sel.length;
+  window.parent.postMessage({type:'__sai_selection',items:sel},'*');
+}
+function __done(){window.parent.postMessage({type:'__sai_done',items:sel},'*');}
+function __clear(){
+  document.querySelectorAll('.__sai_selected,.__sai_hover').forEach(function(el){el.classList.remove('__sai_selected','__sai_hover');});
+  sel=[];document.getElementById('__sai_cnt').textContent='0';
+  window.parent.postMessage({type:'__sai_selection',items:[]},'*');
+}
+window.__done=__done;window.__clear=__clear;
+document.addEventListener('mouseover',onOver,true);
+document.addEventListener('mouseout',onOut,true);
+document.addEventListener('click',onClick,true);
+window.parent.postMessage({type:'__sai_ready'},'*');
+})();
+</script>`;
+
+  if (html.includes("</body>")) html = html.replace("</body>", PICKER + "</body>");
+  else html += PICKER;
+
+  res.json({ success: true, url, layer: fetchResult.layer, html });
+});
+
 // ── POST /api/url-detect ───────────────────────────────────────
 // Deteksi tipe halaman INSTAN dari URL tanpa fetch — pure URL pattern analysis
 app.post("/api/url-detect", (req, res) => {
@@ -2408,181 +2682,166 @@ app.get("/api/generate/stream", async (req, res) => {
     log(" Mengirim request ke AI provider...");
     log("   Ini bisa memakan waktu 30–90 detik, harap tunggu...");
 
-    const SHARED_RULES = `
-ATURAN TIDAK BOLEH DILANGGAR:
+    // ── System prompts per lang ───────────────────────────────
+    const RULES = `ATURAN OUTPUT:
 1. Output HANYA kode MENTAH — tidak ada markdown, backtick, penjelasan di luar kode
-2. Kode HARUS LENGKAP dari awal sampai akhir — jangan pernah potong dengan "// ... dst"
-3. Setiap fungsi, loop, try/catch HARUS punya penutup yang lengkap
-4. Komentar bahasa Indonesia di dalam kode boleh
-5. Jika kode panjang, tetap tulis SELURUHNYA`;
-
-    const moduleNote = lang === "nodejs" && moduleType
-      ? moduleType === "esm"    ? "\nGunakan ES Module syntax: import/export, file .mjs"
-      : moduleType === "esm-ts" ? "\nGunakan TypeScript + ES Module: import/export dengan type annotations, file .ts"
-      : "\nGunakan CommonJS: require()/module.exports"
-      : "";
+2. Kode HARUS LENGKAP dari baris pertama sampai module.exports — JANGAN potong
+3. Semua fungsi HARUS punya closing bracket yang benar
+4. Komentar boleh dalam bahasa Indonesia di dalam kode`;
 
     const sysMap = {
-      nodejs: `Kamu adalah senior Node.js web scraping engineer.
-${bCF ? "PENTING: Gunakan puppeteer-extra + puppeteer-extra-plugin-stealth, random user-agent, delay acak 1500-3000ms." : "Gunakan axios + cheerio."}${moduleNote}${SHARED_RULES}
-- Mulai dari: // SmartScrapeAI Generated Script
-- require()/import semua library di atas
-- async main() dengan try/catch lengkap
-- console.log(JSON.stringify(result, null, 2))
-- Akhiri: main().catch(console.error)`,
-
-      python: `Kamu adalah senior Python web scraping engineer.
-${bCF ? "PENTING: Gunakan cloudscraper, fake_useragent.UserAgent(), BeautifulSoup, time.sleep(random.uniform(1.5,3.0))." : "Gunakan requests + BeautifulSoup4."}${SHARED_RULES}
-- Mulai dari: # SmartScrapeAI Generated Script
-- import semua di atas
-- def main() dengan try/except lengkap
-- print(json.dumps(result, indent=2, ensure_ascii=False))
-- if __name__ == '__main__': main()`,
-
-      php: `Kamu adalah senior PHP web scraping engineer.
-${bCF ? "PENTING: Gunakan cURL dengan full browser headers, rotate User-Agent, sleep(rand(1,3))." : "Gunakan cURL + DOMDocument."}${SHARED_RULES}
-- Mulai dari: <?php
-- Semua fungsi helper di atas
-- try/catch lengkap
-- echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);`,
+      nodejs: `Kamu adalah senior Node.js scraping engineer.
+Gunakan: axios + cheerio${bCF ? " + puppeteer-extra stealth jika JavaScript site" : ""}.
+Output adalah Express.js router file — BUKAN standalone script.
+${RULES}`,
+      python: `Kamu adalah senior Python scraping engineer.
+Gunakan: requests + BeautifulSoup4${bCF ? " + cloudscraper" : ""}.
+Output adalah Flask Blueprint file.
+${RULES}`,
+      php: `Kamu adalah senior PHP scraping engineer.
+Gunakan: cURL + DOMDocument.
+Output adalah PHP endpoint file.
+${RULES}`,
     };
 
-    const siteContext  = siteType ? `\nTipe website: ${siteType}` : "";
-    const pageContext  = req.query.pageType ? `\nTipe halaman: ${req.query.pageType}` : "";
-    const searchCtx   = req.query.searchQuery ? `\nQuery pencarian: "${req.query.searchQuery}"` : "";
+    const siteCtx   = siteType ? `\nTipe website: ${siteType}` : "";
+    const pageCtx   = req.query.pageType ? `\nTipe halaman: ${req.query.pageType}` : "";
+    const searchCtx = req.query.searchQuery ? `\nSearch query: "${req.query.searchQuery}"` : "";
 
-    // ── Fetch HTML aktual untuk dikirim ke AI ─────────────────
-    log(" Mengambil HTML halaman untuk konteks AI...");
-    let htmlSnippet  = "";
-    let fetchedHtml  = "";
+    // ── Fetch HTML & build real DOM context ──────────────────
+    log(" Mengambil HTML nyata untuk konteks AI...");
+    let fetchedHtml = "";
     try {
-      const fetchRes = await fetchWithBypass(url, () => {});
-      if (fetchRes.html) {
-        fetchedHtml = fetchRes.html;
-        log(` HTML berhasil diambil (layer ${fetchRes.layer})`);
-      }
+      const fr = await fetchWithBypass(url, () => {});
+      if (fr.html) { fetchedHtml = fr.html; log(` HTML layer ${fr.layer} berhasil`); }
     } catch {}
 
-    // ── Parse deep DOM dari HTML yang di-fetch ────────────────
-    let domDataContext = "";
-    let bestSelector   = "";
-    let foundFields    = [];
-    let itemTypeInfo   = "";
+    let domContext  = "";
+    let bestSel     = "";
+    let foundFields = [];
+    let htmlSample  = "";
 
-    // 1. Coba dari selectors param (dari scan sebelumnya — paling akurat)
+    // Parse dari selectors param (checkbox yang dipilih user — paling akurat)
     if (selectors) {
       try {
         const parsed = JSON.parse(selectors);
         if (Array.isArray(parsed) && parsed.length) {
           const best   = parsed.find(p => p.source === "microdata") || parsed[0];
-          bestSelector = best.selector || "";
+          bestSel      = best.selector || "";
           foundFields  = best.fields   || [];
-          itemTypeInfo = best.itemType || "";
-          const fieldStr = foundFields.slice(0, 10)
-            .map(f => `  - ${f.name} (${f.source || "dom"}): "${(f.value || "").substring(0, 80)}"`)
+          const fStr   = foundFields.slice(0, 12)
+            .map(f => `  ${f.name} (${f.source}): "${(f.value||"").substring(0,80)}"`)
             .join("\n");
-          domDataContext = `\n=== DATA NYATA DARI DOM SCAN ===
-Selector utama: ${bestSelector}
-Item type: ${itemTypeInfo || "(DOM group)"}
-Jumlah item: ${best.count || "?"}
-Field per item:
-${fieldStr || "  (ambil title, link, image)"}
-${parsed.slice(0, 5).map(g => `\nElemen lain: cat="${g.category}" sel="${g.selector}" count=${g.count} src=${g.source}`).join("")}`;
+          const allSels = parsed.slice(0, 6)
+            .map(g => `  [${g.label}] sel="${g.selector}" fields=[${(g.rawFields||[]).join(",")}]`)
+            .join("\n");
+          domContext = `\n=== HASIL SCAN HTML NYATA ===\nCard selector: ${bestSel}\nItemType: ${best.itemType||"(DOM group)"}\nJumlah: ${best.count||"?"}\n\nField per card:\n${fStr||"  (title, link, image)"}\n\nSemua elemen dipilih:\n${allSels}`;
         }
       } catch {}
     }
 
-    // 2. Jika ada HTML, buat snippet microdata/card yang akurat untuk AI
+    // Sample HTML card nyata
     if (fetchedHtml) {
       try {
-        const $p = cheerio.load(fetchedHtml);
-
-        // Ambil satu contoh card nyata dari HTML
-        let sampleCardHtml = "";
-
-        // Prioritas 1: microdata article
-        const microdataEl = $p("[itemscope]").not("[itemscope] [itemscope]").first();
-        if (microdataEl.length) {
-          // Bersihkan: hapus script/style, potong panjang
-          const clone = microdataEl.clone();
-          clone.find("script, style, noscript").remove();
-          sampleCardHtml = clone.html()?.replace(/\s{2,}/g, " ").substring(0, 1500) || "";
-          if (!bestSelector) bestSelector = makeSelector(microdataEl[0], $p);
-        }
-
-        // Prioritas 2: artikel pertama jika tidak ada microdata
-        if (!sampleCardHtml) {
-          const articleEl = $p("article, li[class]").first();
-          if (articleEl.length) {
-            const clone = articleEl.clone();
-            clone.find("script, style").remove();
-            sampleCardHtml = clone.html()?.replace(/\s{2,}/g, " ").substring(0, 1500) || "";
-            if (!bestSelector) bestSelector = makeSelector(articleEl[0], $p);
-          }
-        }
-
-        if (sampleCardHtml) {
-          htmlSnippet = sampleCardHtml;
-          if (!domDataContext) {
-            domDataContext = `\n=== SAMPLE HTML CARD NYATA ===
-Selector: ${bestSelector}
-HTML sample (1 item):
-${sampleCardHtml.substring(0, 1200)}`;
-          } else {
-            domDataContext += `\n\nSample HTML card nyata (1 item dari ${bestSelector}):
-${sampleCardHtml.substring(0, 800)}`;
-          }
+        const $h = cheerio.load(fetchedHtml);
+        const cardEl = $h("[itemscope]").not("[itemscope] [itemscope]").first().length
+          ? $h("[itemscope]").not("[itemscope] [itemscope]").first()
+          : $h("article").first().length ? $h("article").first() : $h("li[class]").first();
+        if (cardEl.length) {
+          const clone = cardEl.clone();
+          clone.find("script,style,noscript").remove();
+          htmlSample = clone.html()?.replace(/\s{2,}/g," ").trim().substring(0, 1500) || "";
+          if (!bestSel) bestSel = makeSelector(cardEl[0], $h);
+          domContext += `\n\n=== SAMPLE HTML CARD NYATA (1 item dari ${bestSel}) ===\n${htmlSample.substring(0,1200)}`;
         }
       } catch {}
     }
 
-    const siteSpecificGuide = {
-      streaming: `\nPanduan scraping streaming:
-- Loop tiap card dengan selector: "${bestSelector || "article[itemscope], li"}"
-- Per card ambil: title (h3 atau itemprop=name), link (a[href] atau itemprop=url), image (img src/data-src atau itemprop=image), rating (itemprop=ratingValue), year (itemprop=datePublished), quality, episode count
-- Handle lazy-load images: coba src, data-src, data-lazy, data-original, data-thumbnail_url
-- Pagination: ikuti a[rel=next] atau link "Next/Page 2"`,
-      ecommerce: `\nPanduan scraping ecommerce:
-- Loop tiap card: "${bestSelector || "li, article"}"
-- Per card: nama (heading), harga (span harga/price), rating, gambar (img src/data-src), link
-- Handle harga: hapus "Rp ", ".", ",", parse ke number`,
-      news: `\nPanduan scraping news:
-- Loop tiap artikel: "${bestSelector || "article, .item"}"
-- Per artikel: judul, tanggal (time[datetime] atau meta), penulis, thumbnail, link`,
-    };
+    const hostname  = (() => { try { return new URL(url).hostname.replace("www.",""); } catch { return "site"; } })();
+    const routeName = hostname.replace(/\./g,"").replace(/[^a-z0-9]/gi,"").toLowerCase();
+    const fieldList = foundFields.slice(0,8).map(f=>f.name).join(", ") || "title, link, image, rating";
+    const hasSearch = (target||"").toLowerCase().includes("cari") || (target||"").toLowerCase().includes("search") || (selectors||"").includes("search_form");
+    const modesStr  = hasSearch
+      ? `mode=list (semua item), mode=search&query=xxx (cari), mode=detail&url=xxx (detail)`
+      : `mode=list (semua item), mode=detail&url=xxx (detail item)`;
 
-    const prompt = `URL Target: ${url}
-Target data: ${target}
-Bahasa: ${lang}${siteContext}${pageContext}${searchCtx}
-${bCF ? "Bypass mode: AKTIF (Cloudflare/WAF detected)" : ""}
-${domDataContext}
-${siteSpecificGuide[siteType] || ""}
+    const prompt = `Website: ${url}${siteCtx}${pageCtx}${searchCtx}
+Target: ${target}
+${bCF ? "Note: Website pakai proteksi — tambahkan headers browser lengkap + retry 3x" : ""}
+${domContext}
 
-TUGAS: Buat scraper PRODUCTION-READY yang langsung bisa dijalankan.
+TUGAS: Buat Express.js router file sebagai API scraper untuk website di atas.
 
-Gunakan data nyata di atas untuk membuat selector yang tepat.
+MODES yang harus ada: ${modesStr}
 
-Struktur WAJIB:
-1. require/import semua library
-2. BASE_URL = "${url}"
-3. HEADERS = { "User-Agent": "Mozilla/5.0 Chrome/131...", Accept, Accept-Language, dll }
-4. async function fetchPage(url) — axios.get dengan retry 3x, delay random 800-2000ms
-5. function parseItems(html):
-   - const $ = cheerio.load(html)
-   - Loop dengan: $("${bestSelector || "article[itemscope], li"}").each(...)
-   - Per item ekstrak SEMUA field dari DOM sample di atas: ${foundFields.slice(0,6).map(f=>f.name).join(", ") || "title, link, image, rating, year"}
-   - Handle img lazy-load: try src, data-src, data-lazy, data-original
-   - Return array of objects
-6. async function main():
-   - Loop halaman 1..N (ikuti a[rel=next] untuk pagination)
-   - Collect semua items
-   - console.log(JSON.stringify(items, null, 2))
-7. main().catch(console.error)
+FORMAT WAJIB (ikuti struktur ini PERSIS):
 
-ATURAN:
-- Tulis SEMUA kode lengkap, JANGAN potong dengan "// ..." atau placeholder
-- Selector HARUS berdasarkan HTML nyata di atas, bukan asumsi
-- Kode harus bisa langsung dijalankan: node scraper.js`;
+const express = require('express');
+const axios = require('axios');
+const cheerio = require('cheerio');
+const router = express.Router();
+
+router.tags = ["${siteType||"scraper"}"];
+
+/**
+ * Scraper API: ${url}
+ * Endpoint: /api/${routeName}?mode=list
+ *           /api/${routeName}?mode=search&query=xxx
+ *           /api/${routeName}?mode=detail&url=xxx
+ */
+
+const HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'id-ID,id;q=0.9,en;q=0.5',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Connection': 'keep-alive',
+};
+
+const fetchHtml = async (url) => {
+  for (let i = 0; i < 3; i++) {
+    try {
+      const { data } = await axios.get(url, { headers: HEADERS, timeout: 15000 });
+      return data;
+    } catch (e) {
+      if (i === 2) throw e;
+      await new Promise(r => setTimeout(r, 1000 + i * 500));
+    }
+  }
+};
+
+// Mode: list — loop $("${bestSel||"article[itemscope]"}").each(...)
+// Ekstrak per item: ${fieldList}
+// Lazy-load img: coba src → data-src → data-lazy → data-original → data-thumbnail_url
+const fetchList = async (baseUrl) => { ... };
+
+// Mode: detail — dari URL item, ekstrak info lengkap
+const fetchDetail = async (itemUrl) => { ... };
+
+router.get('/', async (req, res) => {
+  const { mode, query, url: itemUrl } = req.query;
+  if (!mode) return res.status(400).json({ status: 'error', message: 'Parameter mode diperlukan' });
+  try {
+    if (mode === 'list') { ... }
+    else if (mode === 'search') { ... }
+    else if (mode === 'detail') { ... }
+    else return res.status(400).json({ status: 'error', message: 'Mode tidak valid' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+module.exports = router;
+
+KODE NYATA YANG HARUS DIBUAT (LENGKAP):
+- Selector utama: "${bestSel||"article[itemscope]"}"
+- Field per item: ${fieldList}
+- Handle lazy-load img: src → data-src → data-lazy → data-original → data-thumbnail_url
+- Pagination dalam fetchList: ikuti a[rel=next] atau tambah halaman
+- Setiap fungsi return array/object dengan field yang LENGKAP
+- Response JSON: { status: "success", message: "...", results: [...] }
+- TULIS SEMUA KODE LENGKAP — jangan ada "// ... implement here" atau placeholder apapun`;
+
 
     const code = await (async () => {
       const raw = await callAI({ provider, apiKey, model, system: sysMap[lang], prompt, maxTokens: null });
