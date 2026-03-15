@@ -2888,7 +2888,16 @@ ${paginationInfo.totalPages ? `Total halaman: ${paginationInfo.totalPages}` : ""
       } catch {}
     }
 
-    // ── Deteksi tipe halaman secara akurat dari URL ────────────
+    // ── Pagination strategy string (used in prompt templates) ──
+    const pagStrategy = paginationInfo.found ? (
+      paginationInfo.type === "rel_next"        ? `ikuti a[rel="next"].href loop sampai tidak ada lagi` :
+      paginationInfo.type === "url_param"       ? `increment page parameter di URL (page=1,2,3,...) loop sampai halaman kosong` :
+      paginationInfo.type === "button_next"     ? `ambil URL dari tombol next ("${paginationInfo.selector}"), follow sampai tidak ada` :
+      paginationInfo.type === "infinite_scroll" ? `gunakan parameter page/offset di request, loop sampai response kosong` :
+      `ikuti a[rel="next"] atau increment page parameter`
+    ) : `coba a[rel="next"] dulu, jika tidak ada increment ?page=N atau /page/N`;
+
+        // ── Deteksi tipe halaman secara akurat dari URL ────────────
     let PAGE_TYPE = "general";
     let PAGE_TYPE_DESC = "";
     try {
