@@ -1,31 +1,43 @@
+# ══════════════════════════════════════════════════════════
+#  SmartScrapeAI v4 — Dockerfile (Clever Cloud / Docker)
+#  Env vars (PORT, ADMIN_USER, ADMIN_PASS, etc.) diinjek
+#  oleh platform di runtime — tidak perlu .env file.
+# ══════════════════════════════════════════════════════════
 FROM node:20-alpine
+
+# Install build deps (untuk native npm modules)
+RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 
-# Copy root package.json
+# ── Install root dependencies ───────────────────────────
 COPY package.json ./
-
-# Copy client
-COPY client/package.json ./client/
-
-# Install root dependencies
 RUN npm install --production
 
-# Install client dependencies and build
-COPY client/ ./client/
-RUN cd client && npm install && npm run build
+# ── Build React frontend ────────────────────────────────
+COPY client/package.json ./client/
+RUN cd client && npm install
 
-# Copy server files
+COPY client/ ./client/
+RUN cd client && npm run build && npm prune --production
+
+# ── Copy server files ────────────────────────────────────
 COPY server.js ./
 COPY api/ ./api/
 COPY .env.example ./.env.example
 
-# Create data directory for persistence
-RUN mkdir -p data
+# ── Data directory (scraper registry) ───────────────────
+RUN mkdir -p /app/data && chmod 777 /app/data
 
+# ── Expose port ─────────────────────────────────────────
 EXPOSE 8080
 
+# ── Default env (overridable via platform env vars) ─────
+# Clever Cloud / Railway / Render akan override via ENV panel
 ENV NODE_ENV=production
-ENV PORT=8080
+
+# ── Healthcheck ─────────────────────────────────────────
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD wget -q -O- http://localhost:${PORT:-8080}/health | grep -q '"status":"ok"' || exit 1
 
 CMD ["node", "server.js"]

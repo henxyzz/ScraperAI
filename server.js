@@ -61,9 +61,10 @@ app.use("/api/scraper/:id/fix",  aiLimiter);
 app.use("/api/scraper/:id/edit", aiLimiter);
 
 // ── Admin Authentication Middleware ───────────────────────────
-// Set ADMIN_USER & ADMIN_PASS di .env — default: admin / neural2077
+// Set ADMIN_USER & ADMIN_PASS di .env / platform env panel
+// WAJIB diubah di production — jangan pakai default!
 const ADMIN_USER = process.env.ADMIN_USER || "admin";
-const ADMIN_PASS = process.env.ADMIN_PASS || "neural2077";
+const ADMIN_PASS = process.env.ADMIN_PASS || "smartscrapeai2077";
 
 function adminAuth(req, res, next) {
   const auth = req.headers["authorization"] || "";
@@ -71,22 +72,27 @@ function adminAuth(req, res, next) {
     const [user, pass] = Buffer.from(auth.slice(6), "base64").toString().split(":");
     if (user === ADMIN_USER && pass === ADMIN_PASS) return next();
   }
-  res.setHeader("WWW-Authenticate", 'Basic realm="NeuralAPI Admin Panel"');
+  res.setHeader("WWW-Authenticate", 'Basic realm="SmartScrapeAI Admin"');
   res.status(401).send(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>401 — NeuralAPI Admin</title>
+<html><head><meta charset="UTF-8"><title>401 — SmartScrapeAI Admin</title>
 <style>*{margin:0;padding:0;box-sizing:border-box}
-body{background:#08090d;color:#e8eaf0;font-family:'Segoe UI',sans-serif;
-  display:flex;align-items:center;justify-content:center;min-height:100vh}
-.box{background:#0e1018;border:1px solid #2a2f45;border-radius:16px;
-  padding:40px;text-align:center;max-width:380px}
-h2{color:#2effa8;font-size:20px;margin-bottom:8px}
-p{color:#8b93b0;font-size:13px;line-height:1.6;margin-bottom:20px}
-.hint{font-family:monospace;font-size:11px;color:#4a5068;margin-top:16px}
+body{background:#06070b;color:#c8dae8;font-family:'Segoe UI',sans-serif;
+  display:flex;align-items:center;justify-content:center;min-height:100vh;
+  background-image:linear-gradient(rgba(46,255,168,.015) 1px,transparent 1px),linear-gradient(90deg,rgba(46,255,168,.015) 1px,transparent 1px);
+  background-size:40px 40px}
+.box{background:#0a1219;border:1px solid #1d2f42;border-radius:16px;
+  padding:44px 40px;text-align:center;max-width:360px;
+  box-shadow:0 8px 40px rgba(0,0,0,.6)}
+.icon{width:52px;height:52px;border-radius:14px;background:rgba(46,255,168,.08);
+  border:1px solid rgba(46,255,168,.2);display:flex;align-items:center;justify-content:center;
+  margin:0 auto 18px;font-size:22px}
+h2{color:#2effa8;font-size:18px;margin-bottom:8px;font-weight:700;letter-spacing:-.3px}
+p{color:#7880a0;font-size:13px;line-height:1.65}
 </style></head><body>
 <div class="box">
-  <h2>NeuralAPI Admin</h2>
-  <p>Panel ini dilindungi. Masukkan username &amp; password untuk mengakses.</p>
-  <p class="hint">Default: admin / neural2077<br>Ubah via env: ADMIN_USER &amp; ADMIN_PASS</p>
+  <div class="icon">🔐</div>
+  <h2>Admin Area</h2>
+  <p>Masukkan credentials admin untuk mengakses panel.<br>Credentials diatur via environment variables.</p>
 </div></body></html>`);
 }
 
@@ -4408,7 +4414,7 @@ app.delete("/api/c3/file/:name", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
-//  GET / — NeuralAPI Portal (HTML)
+//  GET / — SmartScrapeAI Public API Portal (Swagger-style)
 // ══════════════════════════════════════════════════════════════
 app.get("/", (req, res) => {
   const all    = registry.getAll();
@@ -4425,359 +4431,231 @@ app.get("/", (req, res) => {
     }))
   );
   const categories = [...new Set(routes.map(r => r.category))].sort();
-  const stats = { total: routes.length, scrapers: all.length, uptime: Math.floor(process.uptime()) };
+  const stats = {
+    total:    routes.length,
+    scrapers: all.length,
+    uptime:   Math.floor(process.uptime()),
+  };
+
+  // Serialize routes safely for embedding in JS
+  const ROUTES_JSON = JSON.stringify(routes)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
 
   const html = `<!DOCTYPE html>
 <html lang="id">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NeuralAPI — AI-Powered REST API</title>
+<title>SmartScrapeAI — API Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#06070b;--bg2:#0b0d14;--bg3:#10121a;
-  --border:#1a1d2e;--border2:#242840;
-  --neon:#2effa8;--neon2:#00c2ff;--neon3:#818cf8;
-  --text:#dde1f0;--text2:#7880a0;--muted:#404660;
-  --danger:#f43f5e;--warn:#f59e0b;--ok:#10b981;
+  --bg:#06070b;--s:#0b0d14;--c:#0f1320;--c2:#131827;
+  --bd:#1a1e30;--bd2:#222740;--bd3:#2c3460;
+  --neon:#2effa8;--n2:#00c2ff;--n3:#818cf8;
+  --tx:#dde1f0;--t2:#7880a0;--mu:#404660;
+  --ok:#10b981;--warn:#f59e0b;--err:#f43f5e;
   --mono:'JetBrains Mono',monospace;--head:'Space Grotesk',sans-serif;
 }
 html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:var(--head);min-height:100vh}
+body{background:var(--bg);color:var(--tx);font-family:var(--head);min-height:100vh;font-size:14px}
+body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:linear-gradient(var(--bd) 1px,transparent 1px),linear-gradient(90deg,var(--bd) 1px,transparent 1px);
+  background-size:44px 44px;opacity:.4}
+.orb1{position:fixed;top:-180px;left:-180px;width:560px;height:560px;background:radial-gradient(ellipse,rgba(46,255,168,.05) 0%,transparent 70%);pointer-events:none;z-index:0}
+.orb2{position:fixed;bottom:-180px;right:-180px;width:480px;height:480px;background:radial-gradient(ellipse,rgba(0,194,255,.04) 0%,transparent 70%);pointer-events:none;z-index:0}
 
-/* Grid noise texture */
-body::before{
-  content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
-  background-image:
-    linear-gradient(var(--border) 1px,transparent 1px),
-    linear-gradient(90deg,var(--border) 1px,transparent 1px);
-  background-size:40px 40px;opacity:.35;
-}
-/* Glow spots */
-.glow-tl{position:fixed;top:-200px;left:-200px;width:600px;height:600px;background:radial-gradient(ellipse,rgba(46,255,168,.05) 0%,transparent 70%);pointer-events:none;z-index:0}
-.glow-br{position:fixed;bottom:-200px;right:-200px;width:500px;height:500px;background:radial-gradient(ellipse,rgba(0,194,255,.04) 0%,transparent 70%);pointer-events:none;z-index:0}
+/* NAV */
+nav{position:sticky;top:0;z-index:200;background:rgba(6,7,11,.92);backdrop-filter:blur(20px);
+  border-bottom:1px solid var(--bd2);display:flex;align-items:center;gap:12px;padding:0 24px;height:52px}
+.nav-logo{display:flex;align-items:center;gap:6px;text-decoration:none}
+.logo-mark{font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:-1px}
+.logo-mark .g{color:var(--neon)}.logo-mark .w{color:var(--tx);opacity:.7}
+.nav-ver{font-family:var(--mono);font-size:8px;padding:2px 8px;border-radius:20px;
+  background:rgba(46,255,168,.07);border:1px solid rgba(46,255,168,.2);color:var(--neon);letter-spacing:1px}
+.nav-spacer{flex:1}
+.nav-search{display:flex;align-items:center;gap:8px;background:var(--c);border:1px solid var(--bd2);
+  border-radius:8px;padding:6px 12px;transition:border-color .2s}
+.nav-search:focus-within{border-color:rgba(46,255,168,.35)}
+.nav-search svg{opacity:.35;flex-shrink:0}
+.nav-search input{background:none;border:none;outline:none;color:var(--tx);font-family:var(--mono);font-size:12px;width:170px}
+.nav-search input::placeholder{color:var(--mu)}
+.nav-live{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;color:var(--t2)}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--neon);animation:pu 2s infinite}
+@keyframes pu{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
 
-/* ── NAV ── */
-nav{
-  position:sticky;top:0;z-index:200;
-  background:rgba(6,7,11,.88);backdrop-filter:blur(24px) saturate(1.5);
-  border-bottom:1px solid var(--border2);
-  display:flex;align-items:center;gap:14px;padding:0 28px;height:54px;
-}
-.nav-logo{
-  display:flex;align-items:center;gap:2px;
-  font-family:var(--mono);font-size:14px;font-weight:700;
-  letter-spacing:-1px;text-decoration:none;
-}
-.nav-logo .n{color:var(--neon)}
-.nav-logo .rest{color:var(--text2);font-weight:300}
-.nav-pill{
-  font-family:var(--mono);font-size:9px;padding:2px 9px;
-  border-radius:20px;background:rgba(46,255,168,.08);
-  border:1px solid rgba(46,255,168,.25);color:var(--neon);
-  letter-spacing:.8px;text-transform:uppercase;
-}
-.nav-search{
-  margin-left:auto;display:flex;align-items:center;gap:8px;
-  background:var(--bg3);border:1px solid var(--border2);
-  border-radius:8px;padding:6px 12px;transition:border-color .2s;
-}
-.nav-search:focus-within{border-color:rgba(46,255,168,.35);background:var(--bg2)}
-.nav-search svg{flex-shrink:0;opacity:.4}
-.nav-search input{
-  background:none;border:none;outline:none;
-  color:var(--text);font-family:var(--mono);font-size:12px;width:180px;
-}
-.nav-search input::placeholder{color:var(--muted)}
-.nav-link{
-  font-family:var(--mono);font-size:11px;color:var(--text2);
-  text-decoration:none;padding:5px 11px;border-radius:6px;
-  border:1px solid transparent;transition:all .15s;
-}
-.nav-link:hover{color:var(--text);border-color:var(--border2);background:var(--bg3)}
+/* HERO */
+.hero{position:relative;z-index:1;max-width:800px;margin:0 auto;padding:52px 24px 40px;text-align:center}
+.eyebrow{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;
+  color:var(--neon);text-transform:uppercase;letter-spacing:2px;margin-bottom:18px;
+  padding:4px 14px;background:rgba(46,255,168,.06);border:1px solid rgba(46,255,168,.18);border-radius:20px}
+.h1{font-size:clamp(28px,5vw,48px);font-weight:700;letter-spacing:-2px;line-height:1.1;margin-bottom:14px}
+.h1 .brand{background:linear-gradient(120deg,#2effa8 0%,#00c2ff 50%,#818cf8 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.sub{font-size:14px;color:var(--t2);line-height:1.8;max-width:520px;margin:0 auto 28px}
+.sub b{color:var(--tx)}
+.stats{display:inline-flex;border:1px solid var(--bd2);border-radius:12px;overflow:hidden;background:var(--s)}
+.st{padding:12px 22px;text-align:center;border-right:1px solid var(--bd)}
+.st:last-child{border-right:none}
+.st-n{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--neon);display:block;line-height:1}
+.st-l{font-size:9px;color:var(--mu);text-transform:uppercase;letter-spacing:1.5px;margin-top:4px}
 
-/* ── HERO ── */
-.hero{
-  position:relative;z-index:1;
-  max-width:740px;margin:0 auto;
-  padding:64px 24px 48px;text-align:center;
-}
-.hero-eyebrow{
-  display:inline-flex;align-items:center;gap:8px;
-  font-family:var(--mono);font-size:10px;color:var(--neon);
-  text-transform:uppercase;letter-spacing:2px;margin-bottom:20px;
-  padding:4px 14px;background:rgba(46,255,168,.06);
-  border:1px solid rgba(46,255,168,.2);border-radius:20px;
-}
-.hero-eyebrow::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--neon);animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
-.hero-h1{
-  font-size:clamp(32px,6vw,52px);font-weight:700;
-  letter-spacing:-2px;line-height:1.1;margin-bottom:16px;
-}
-.hero-h1 .brand{
-  background:linear-gradient(135deg,#2effa8 0%,#00c2ff 40%,#818cf8 100%);
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
-}
-.hero-sub{
-  font-size:15px;color:var(--text2);line-height:1.75;
-  max-width:560px;margin:0 auto 32px;
-}
-.hero-sub b{color:var(--text)}
+/* LAYOUT */
+.wrap{position:relative;z-index:1;display:flex;gap:0;max-width:1180px;margin:0 auto;padding:28px 20px 60px}
 
-/* Stats */
-.hero-stats{
-  display:inline-flex;border:1px solid var(--border2);
-  border-radius:12px;overflow:hidden;background:var(--bg2);
-}
-.hs{
-  padding:14px 24px;text-align:center;
-  border-right:1px solid var(--border);
-}
-.hs:last-child{border-right:none}
-.hs-n{font-family:var(--mono);font-size:24px;font-weight:700;color:var(--neon);line-height:1;display:block}
-.hs-l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px;margin-top:4px}
-
-/* ── LAYOUT ── */
-.wrap{
-  position:relative;z-index:1;
-  display:flex;gap:0;max-width:1200px;margin:0 auto;padding:32px 24px 64px;
-}
-
-/* Sidebar */
-.sb{
-  width:190px;flex-shrink:0;position:sticky;top:68px;
-  height:calc(100vh - 80px);overflow-y:auto;padding-right:14px;
-}
-.sb::-webkit-scrollbar{width:2px}
-.sb::-webkit-scrollbar-thumb{background:var(--border2)}
-.sb-lbl{
-  font-family:var(--mono);font-size:9px;color:var(--muted);
-  text-transform:uppercase;letter-spacing:2px;
-  padding:0 8px 10px;border-bottom:1px solid var(--border);
-  margin-bottom:8px;
-}
+/* SIDEBAR */
+.sb{width:180px;flex-shrink:0;position:sticky;top:62px;height:calc(100vh - 80px);overflow-y:auto;padding-right:12px}
+.sb::-webkit-scrollbar{width:2px}.sb::-webkit-scrollbar-thumb{background:var(--bd2)}
+.sb-lbl{font-family:var(--mono);font-size:8px;color:var(--mu);text-transform:uppercase;
+  letter-spacing:2.5px;padding:0 6px 8px;border-bottom:1px solid var(--bd);margin-bottom:6px}
 .sb-cats{display:flex;flex-direction:column;gap:2px}
-.cat{
-  all:unset;display:flex;align-items:center;justify-content:space-between;
-  width:100%;padding:7px 10px;border-radius:7px;cursor:pointer;
-  font-size:12.5px;color:var(--text2);transition:all .15s;
-}
-.cat:hover{background:rgba(255,255,255,.04);color:var(--text)}
+.cat{all:unset;display:flex;align-items:center;justify-content:space-between;width:100%;
+  padding:6px 9px;border-radius:7px;cursor:pointer;font-size:12px;color:var(--t2);transition:all .15s}
+.cat:hover{background:rgba(255,255,255,.04);color:var(--tx)}
 .cat.on{background:rgba(46,255,168,.07);color:var(--neon)}
-.cat-n{
-  font-family:var(--mono);font-size:9px;
-  background:var(--bg3);border:1px solid var(--border);
-  color:var(--muted);padding:1px 7px;border-radius:10px;
-}
+.cat-n{font-family:var(--mono);font-size:8px;background:var(--c);border:1px solid var(--bd);
+  color:var(--mu);padding:1px 6px;border-radius:8px}
 .cat.on .cat-n{background:rgba(46,255,168,.1);border-color:rgba(46,255,168,.2);color:var(--neon)}
 
-/* Main */
+/* MAIN */
 .main{flex:1;min-width:0}
-.grp-title{
-  display:flex;align-items:center;gap:10px;
-  padding-bottom:12px;border-bottom:1px solid var(--border);
-  margin-bottom:16px;
-}
-.grp-title h2{font-size:14px;font-weight:600;color:var(--text);text-transform:capitalize}
-.grp-count{
-  font-family:var(--mono);font-size:9px;color:var(--muted);
-  background:var(--bg3);border:1px solid var(--border);
-  padding:2px 8px;border-radius:10px;
-}
-.grp{margin-bottom:40px}
+.grp{margin-bottom:36px}
+.grp-hd{display:flex;align-items:center;gap:10px;padding-bottom:10px;
+  border-bottom:1px solid var(--bd);margin-bottom:14px}
+.grp-hd h2{font-size:13px;font-weight:600;color:var(--tx);text-transform:capitalize}
+.grp-cnt{font-family:var(--mono);font-size:8px;color:var(--mu);background:var(--c);
+  border:1px solid var(--bd);padding:2px 8px;border-radius:8px}
+.cards{display:flex;flex-direction:column;gap:7px}
 
-/* Cards */
-.cards{display:flex;flex-direction:column;gap:8px}
-.card{
-  background:var(--bg2);border:1px solid var(--border);
-  border-radius:12px;overflow:hidden;
-  transition:border-color .2s,box-shadow .2s;
-}
-.card:hover{border-color:var(--border2);box-shadow:0 2px 20px rgba(0,0,0,.3)}
-.card.open{border-color:rgba(46,255,168,.2)}
-.ch{
-  display:flex;align-items:center;gap:12px;
-  padding:13px 18px;cursor:pointer;user-select:none;
-}
-.method{
-  font-family:var(--mono);font-size:9px;font-weight:700;
-  padding:3px 9px;border-radius:4px;flex-shrink:0;letter-spacing:.8px;
-}
-.mGET   {background:rgba(16,185,129,.1);color:#10b981;border:1px solid rgba(16,185,129,.2)}
-.mPOST  {background:rgba(0,194,255,.1);color:var(--neon2);border:1px solid rgba(0,194,255,.2)}
-.mDELETE{background:rgba(244,63,94,.1);color:var(--danger);border:1px solid rgba(244,63,94,.2)}
-.cpath{
-  font-family:var(--mono);font-size:12.5px;color:var(--text);
-  flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.cpath .p{color:var(--neon3)}
-.cdesc{font-size:11px;color:var(--text2);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chevron{color:var(--muted);flex-shrink:0;transition:transform .2s;font-size:12px}
-.card.open .chevron{transform:rotate(180deg)}
-.cbody{display:none;border-top:1px solid var(--border);padding:18px;flex-direction:column;gap:18px}
+/* ENDPOINT CARD */
+.card{background:var(--c);border:1px solid var(--bd);border-radius:12px;overflow:hidden;transition:border-color .2s}
+.card:hover{border-color:var(--bd2)}
+.card.open{border-color:rgba(46,255,168,.25)}
+.card-hd{display:flex;align-items:center;gap:11px;padding:12px 16px;cursor:pointer;user-select:none}
+.method{font-family:var(--mono);font-size:8px;font-weight:700;padding:3px 8px;border-radius:4px;flex-shrink:0;letter-spacing:1px}
+.mGET{background:rgba(16,185,129,.1);color:#10b981;border:1px solid rgba(16,185,129,.2)}
+.mPOST{background:rgba(0,194,255,.1);color:var(--n2);border:1px solid rgba(0,194,255,.2)}
+.mDELETE{background:rgba(244,63,94,.1);color:var(--err);border:1px solid rgba(244,63,94,.2)}
+.cpath{font-family:var(--mono);font-size:12px;color:var(--tx);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cpath .seg{color:var(--n3)}.cpath .qk{color:var(--neon)}
+.cdesc{font-size:11px;color:var(--t2);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
+.chev{color:var(--mu);flex-shrink:0;transition:transform .2s;font-size:11px}
+.card.open .chev{transform:rotate(180deg)}
+
+/* CARD BODY */
+.cbody{display:none;border-top:1px solid var(--bd);padding:16px;flex-direction:column;gap:16px}
 .card.open .cbody{display:flex}
+.sec-lbl{font-family:var(--mono);font-size:8px;color:var(--mu);text-transform:uppercase;letter-spacing:2px;margin-bottom:7px}
+.ptbl{width:100%;border-collapse:collapse;font-size:12px}
+.ptbl th{font-family:var(--mono);font-size:8px;color:var(--mu);text-transform:uppercase;letter-spacing:1px;padding:0 10px 7px 0;text-align:left}
+.ptbl td{padding:6px 10px 6px 0;border-top:1px solid var(--bd);vertical-align:top;color:var(--t2)}
+.ptbl td:first-child{font-family:var(--mono);font-size:10px;color:var(--n3);white-space:nowrap}
+.req{font-family:var(--mono);font-size:7px;padding:1px 5px;border-radius:3px;
+  background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:var(--warn)}
+.opt{font-family:var(--mono);font-size:7px;padding:1px 5px;border-radius:3px;
+  background:var(--c2);border:1px solid var(--bd);color:var(--mu)}
 
-/* Card body */
-.section-lbl{
-  font-family:var(--mono);font-size:9px;color:var(--muted);
-  text-transform:uppercase;letter-spacing:2px;margin-bottom:8px;
-}
-.ptable{width:100%;border-collapse:collapse;font-size:12px}
-.ptable th{font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;padding:0 12px 8px 0;text-align:left}
-.ptable td{padding:7px 12px 7px 0;border-top:1px solid var(--border);vertical-align:top;color:var(--text2)}
-.ptable td:first-child{font-family:var(--mono);font-size:11px;color:var(--neon3);white-space:nowrap}
-.badge-req{font-family:var(--mono);font-size:8px;padding:1px 6px;border-radius:4px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);color:var(--warn)}
-.badge-opt{font-family:var(--mono);font-size:8px;padding:1px 6px;border-radius:4px;background:var(--bg3);border:1px solid var(--border);color:var(--muted)}
-
-/* Try panel */
-.try-wrap{background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}
-.url-bar{
-  display:flex;align-items:center;gap:8px;
-  background:rgba(0,0,0,.35);border:1px solid var(--border);
-  border-radius:7px;padding:8px 12px;
-}
-.url-m{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--neon)}
-.url-t{font-family:var(--mono);font-size:11px;color:var(--text2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:break-all}
-.try-fields{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
-.tf{display:flex;flex-direction:column;gap:4px;flex:1;min-width:130px}
-.tf label{font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
-.tf input{
-  background:var(--bg2);border:1px solid var(--border2);
-  border-radius:7px;padding:7px 10px;
-  color:var(--text);font-family:var(--mono);font-size:12px;
-  outline:none;width:100%;transition:border-color .15s;
-}
+/* TRY PANEL */
+.try-wrap{background:var(--c2);border:1px solid var(--bd2);border-radius:10px;padding:13px;display:flex;flex-direction:column;gap:10px}
+.url-bar{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.4);border:1px solid var(--bd);
+  border-radius:7px;padding:7px 11px}
+.url-m{font-family:var(--mono);font-size:8px;font-weight:700;color:var(--neon);flex-shrink:0}
+.url-t{font-family:var(--mono);font-size:11px;color:var(--t2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.try-row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+.tf{display:flex;flex-direction:column;gap:4px;flex:1;min-width:120px}
+.tf label{font-family:var(--mono);font-size:8px;color:var(--mu);text-transform:uppercase;letter-spacing:1px}
+.tf input{background:var(--bg);border:1px solid var(--bd2);border-radius:6px;padding:7px 10px;
+  color:var(--tx);font-family:var(--mono);font-size:12px;outline:none;width:100%;transition:border-color .15s}
 .tf input:focus{border-color:rgba(46,255,168,.4)}
-.run{
-  background:var(--neon);color:#000;border:none;
-  padding:8px 20px;border-radius:7px;cursor:pointer;
-  font-family:var(--mono);font-size:12px;font-weight:700;
-  transition:all .15s;flex-shrink:0;
-}
-.run:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.run{background:var(--neon);color:#000;border:none;padding:8px 18px;border-radius:7px;cursor:pointer;
+  font-family:var(--mono);font-size:12px;font-weight:700;transition:all .15s;flex-shrink:0;
+  display:flex;align-items:center;gap:6px}
+.run:hover{filter:brightness(1.08);transform:translateY(-1px)}
 .run:active{transform:translateY(0)}
-.run:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.run:disabled{opacity:.45;cursor:not-allowed;transform:none}
 
-/* Result */
-.result-box{display:none}
-.result-meta{display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
-.r-status-ok{font-family:var(--mono);font-size:10px;color:var(--ok);background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);padding:2px 8px;border-radius:4px}
-.r-status-err{font-family:var(--mono);font-size:10px;color:var(--danger);background:rgba(244,63,94,.08);border:1px solid rgba(244,63,94,.2);padding:2px 8px;border-radius:4px}
-.r-time{font-family:var(--mono);font-size:10px;color:var(--muted)}
-.r-copy{
-  margin-left:auto;font-family:var(--mono);font-size:9px;
-  background:none;border:1px solid var(--border2);color:var(--muted);
-  padding:3px 10px;border-radius:5px;cursor:pointer;transition:all .15s;
-}
+/* RESULT */
+.res-box{display:none}
+.res-meta{display:flex;gap:8px;align-items:center;margin-bottom:7px;flex-wrap:wrap}
+.r-ok{font-family:var(--mono);font-size:9px;color:var(--ok);background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);padding:2px 7px;border-radius:4px}
+.r-err{font-family:var(--mono);font-size:9px;color:var(--err);background:rgba(244,63,94,.07);border:1px solid rgba(244,63,94,.2);padding:2px 7px;border-radius:4px}
+.r-ms{font-family:var(--mono);font-size:9px;color:var(--mu)}
+.r-copy{margin-left:auto;font-family:var(--mono);font-size:8px;background:none;border:1px solid var(--bd2);
+  color:var(--mu);padding:3px 9px;border-radius:4px;cursor:pointer;transition:all .15s}
 .r-copy:hover{color:var(--neon);border-color:rgba(46,255,168,.3)}
-.result-pre{
-  background:rgba(0,0,0,.5);border:1px solid var(--border);
-  border-radius:8px;padding:14px;
-  max-height:340px;overflow:auto;
-}
-.result-pre pre{font-family:var(--mono);font-size:11px;line-height:1.65;white-space:pre-wrap;word-break:break-all;color:var(--text2)}
+.res-pre{background:rgba(0,0,0,.55);border:1px solid var(--bd);border-radius:8px;padding:13px;
+  max-height:320px;overflow:auto}
+.res-pre pre{font-family:var(--mono);font-size:11px;line-height:1.65;white-space:pre-wrap;word-break:break-all;color:var(--t2)}
 
-/* Empty */
-.empty{
-  display:flex;flex-direction:column;align-items:center;
-  text-align:center;padding:80px 20px;gap:14px;
-}
-.empty-icon{
-  width:64px;height:64px;border-radius:16px;
-  background:var(--bg2);border:1px solid var(--border2);
-  font-size:28px;display:flex;align-items:center;justify-content:center;
-}
-.empty-cta{
-  display:inline-flex;align-items:center;gap:6px;
-  background:var(--neon);color:#000;padding:9px 22px;
-  border-radius:8px;font-weight:700;font-size:13px;text-decoration:none;
-}
+/* EMPTY */
+.empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:80px 20px;gap:14px}
+.empty-ico{width:60px;height:60px;border-radius:14px;background:var(--c);border:1px solid var(--bd2);
+  font-size:26px;display:flex;align-items:center;justify-content:center}
 
-/* Footer */
-footer{
-  position:relative;z-index:1;
-  border-top:1px solid var(--border);padding:20px 28px;
-  display:flex;align-items:center;justify-content:space-between;
-  flex-wrap:wrap;gap:10px;
-}
-.ft-brand{font-family:var(--mono);font-size:12px}
-.ft-brand .n{color:var(--neon)}
-.ft-right{font-family:var(--mono);font-size:10px;color:var(--muted)}
+/* FOOTER */
+footer{position:relative;z-index:1;border-top:1px solid var(--bd);padding:18px 24px;
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.ft-brand{font-family:var(--mono);font-size:11px}.ft-brand .g{color:var(--neon)}
+.ft-r{font-family:var(--mono);font-size:9px;color:var(--mu)}
 
-/* Spinner */
-.sp{
-  width:14px;height:14px;border:2px solid rgba(0,0,0,.2);
-  border-top-color:#000;border-radius:50%;
-  animation:spin .6s linear infinite;display:inline-block;
-}
+/* SPINNER */
+.sp{width:13px;height:13px;border:2px solid rgba(0,0,0,.15);border-top-color:#000;
+  border-radius:50%;animation:spin .65s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* Scrollbar */
+/* SCROLLBAR */
 ::-webkit-scrollbar{width:4px;height:4px}
-::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:4px}
 
-/* Mobile */
+/* RESPONSIVE */
 @media(max-width:680px){
-  .wrap{flex-direction:column;padding:16px}
-  .sb{width:100%;position:static;height:auto;padding:0}
-  .sb-cats{flex-direction:row;overflow-x:auto;display:flex;gap:6px;padding-bottom:8px}
+  .wrap{flex-direction:column;padding:12px}
+  .sb{width:100%;position:static;height:auto;padding:0 0 12px}
+  .sb-cats{flex-direction:row;overflow-x:auto;flex-wrap:nowrap;gap:5px;padding-bottom:4px}
   .cat{white-space:nowrap}
-  .cdesc,.hero-stats .hs:last-child{display:none}
-  .nav-search input{width:110px}
+  .cdesc{display:none}
+  .nav-search input{width:100px}
 }
 </style>
 </head>
 <body>
-<div class="glow-tl"></div>
-<div class="glow-br"></div>
+<div class="orb1"></div><div class="orb2"></div>
 
-<!-- NAV -->
 <nav>
   <a class="nav-logo" href="/">
-    <span class="n">Neural</span>API
+    <div class="logo-mark"><span class="g">Smart</span><span class="w">Scrape</span><span class="g">AI</span></div>
   </a>
-  <span class="nav-pill">v2.0 · AI-Powered</span>
+  <span class="nav-ver">REST API · v4</span>
+  <div class="nav-spacer"></div>
   <div class="nav-search">
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-    <input id="sq" type="text" placeholder="Cari endpoint..." oninput="doSearch(this.value)">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input id="sq" type="text" placeholder="Cari endpoint, kategori..." oninput="doSearch(this.value)">
   </div>
-  <span id="nav-count" style="font-family:var(--mono);font-size:11px;color:var(--muted)"></span>
-  <a class="nav-link" href="/health">Status</a>
+  <span id="nav-cnt" style="font-family:var(--mono);font-size:10px;color:var(--mu)"></span>
+  <div class="nav-live"><div class="pulse"></div><span id="up-clock">--</span></div>
 </nav>
 
-<!-- HERO -->
 <div class="hero">
-  <div class="hero-eyebrow">AI-Powered REST API</div>
-  <h1 class="hero-h1">
-    <span class="brand">NeuralAPI</span><br>
-    <span style="font-size:.55em;color:var(--text2);font-weight:300;letter-spacing:-.5px">Built by AI · Fixed by AI · Always Online</span>
-  </h1>
-  <p class="hero-sub">
-    Semua endpoint di-generate otomatis oleh AI dari website target.
-    Scraper yang error <b>diperbaiki sendiri</b> oleh AI engine bawaan.
-    Akses langsung, tidak perlu API key.
+  <div class="eyebrow">
+    <div class="pulse"></div>
+    AI-Powered REST API
+  </div>
+  <h1 class="h1"><span class="brand">SmartScrapeAI</span></h1>
+  <p class="sub">
+    API endpoint di-generate otomatis oleh AI dari website target.<br>
+    <b>Tidak perlu API key</b> — langsung akses, hasil real-time.
   </p>
-  <div class="hero-stats">
-    <div class="hs">
-      <span class="hs-n" id="s-ep">${stats.total}</span>
-      <div class="hs-l">Endpoints</div>
-    </div>
-    <div class="hs">
-      <span class="hs-n" id="s-sc">${stats.scrapers}</span>
-      <div class="hs-l">Scrapers</div>
-    </div>
-    <div class="hs">
-      <span class="hs-n" id="s-up">${stats.uptime}s</span>
-      <div class="hs-l">Uptime</div>
-    </div>
+  <div class="stats">
+    <div class="st"><span class="st-n" id="s-ep">${stats.total}</span><div class="st-l">Endpoints</div></div>
+    <div class="st"><span class="st-n" id="s-sc">${stats.scrapers}</span><div class="st-l">Scrapers</div></div>
+    <div class="st"><span class="st-n" id="s-up">${stats.uptime}s</span><div class="st-l">Uptime</div></div>
   </div>
 </div>
 
-<!-- LAYOUT -->
 <div class="wrap">
   <aside class="sb">
     <div class="sb-lbl">Kategori</div>
@@ -4786,31 +4664,36 @@ footer{
   <main class="main" id="main"></main>
 </div>
 
-<!-- FOOTER -->
 <footer>
-  <span class="ft-brand"><span class="n">Neural</span>API — REST API Portal</span>
-  <span class="ft-right" id="ft-time"></span>
+  <span class="ft-brand"><span class="g">SmartScrape</span>AI — REST API Portal</span>
+  <span class="ft-r" id="ft-dt"></span>
 </footer>
 
 <script>
-const ROUTES = ${JSON.stringify(routes)};
+// Routes data embedded safely
+const ROUTES = ${ROUTES_JSON};
 const CATS   = ${JSON.stringify(categories)};
 let activeCat = 'all', searchQ = '';
 
-// Uptime
-let up = ${stats.uptime};
+// Uptime counter
+let upSec = ${stats.uptime};
 setInterval(() => {
-  up++;
+  upSec++;
   const el = document.getElementById('s-up');
-  if (!el) return;
-  if (up < 60) el.textContent = up + 's';
-  else if (up < 3600) el.textContent = Math.floor(up/60) + 'm' + (up%60) + 's';
-  else el.textContent = Math.floor(up/3600) + 'h' + Math.floor((up%3600)/60) + 'm';
+  const ck = document.getElementById('up-clock');
+  if (el) {
+    const h = Math.floor(upSec/3600), m = Math.floor((upSec%3600)/60), s = upSec%60;
+    el.textContent = h > 0 ? h+'h '+m+'m' : m > 0 ? m+'m '+s+'s' : s+'s';
+  }
+  if (ck) {
+    const d = new Date();
+    ck.textContent = d.toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  }
 }, 1000);
 
-// Server time
+// Datetime footer
 function tick() {
-  const el = document.getElementById('ft-time');
+  const el = document.getElementById('ft-dt');
   if (el) el.textContent = new Date().toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'short'});
 }
 tick(); setInterval(tick, 30000);
@@ -4820,16 +4703,19 @@ function buildSidebar() {
   const counts = {};
   ROUTES.forEach(r => { counts[r.category] = (counts[r.category]||0)+1; });
   const cl = document.getElementById('catList');
-  const total = document.createElement('button');
-  total.className = 'cat on'; total.dataset.cat = 'all';
-  total.onclick = () => setCat('all', total);
-  total.innerHTML = 'Semua <span class="cat-n" id="cn-all">' + ROUTES.length + '</span>';
-  cl.appendChild(total);
+  if (!cl) return;
+
+  const allBtn = document.createElement('button');
+  allBtn.className = 'cat on'; allBtn.dataset.cat = 'all';
+  allBtn.onclick = () => setCat('all', allBtn);
+  allBtn.innerHTML = 'Semua <span class="cat-n" id="cn-all">'+ROUTES.length+'</span>';
+  cl.appendChild(allBtn);
+
   CATS.forEach(c => {
     const b = document.createElement('button');
     b.className = 'cat'; b.dataset.cat = c;
     b.onclick = () => setCat(c, b);
-    b.innerHTML = c.charAt(0).toUpperCase()+c.slice(1) + ' <span class="cat-n">' + (counts[c]||0) + '</span>';
+    b.innerHTML = c.charAt(0).toUpperCase()+c.slice(1)+' <span class="cat-n">'+(counts[c]||0)+'</span>';
     cl.appendChild(b);
   });
 }
@@ -4848,171 +4734,203 @@ function filtered() {
     const cOk = activeCat === 'all' || r.category === activeCat;
     const sOk = !searchQ ||
       r.path.toLowerCase().includes(searchQ) ||
-      r.description.toLowerCase().includes(searchQ) ||
-      r.category.toLowerCase().includes(searchQ);
+      (r.description||'').toLowerCase().includes(searchQ) ||
+      r.category.toLowerCase().includes(searchQ) ||
+      r.name.toLowerCase().includes(searchQ);
     return cOk && sOk;
   });
 }
 
 function fmtPath(p) {
-  return p.replace(/:([a-zA-Z_]+)/g, '<span class="p">:$1</span>')
-          .replace(/([?&])([^=&]+)=/g, '$1<span class="p">$2</span>=');
+  return p
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/:([a-zA-Z_]+)/g,'<span class="seg">:$1</span>')
+    .replace(/([?&])([^=&<>]+)=/g,'$1<span class="qk">$2</span>=');
 }
 
+// Build a single card element — all data stored on the element, no inline JS
 function buildCard(r, cid) {
-  const hasP = r.params && r.params.length > 0;
-  let pHtml = '', inpHtml = '';
+  const div = document.createElement('div');
+  div.className = 'card';
+  div.id = cid;
 
-  if (hasP) {
-    pHtml = '<div><div class="section-lbl">Parameters</div><table class="ptable"><thead><tr><th>Nama</th><th>Tipe</th><th>Deskripsi</th><th>Wajib</th></tr></thead><tbody>';
+  // Store params as JSON on a data attribute (safe, no quoting issues)
+  div.dataset.params = JSON.stringify(r.params || []);
+  div.dataset.method = r.method;
+  div.dataset.path   = r.path;
+
+  // Build param table HTML
+  let pHtml = '';
+  if (r.params && r.params.length) {
+    pHtml = '<div><div class="sec-lbl">Parameters</div><table class="ptbl"><thead><tr><th>Nama</th><th>Tipe</th><th>Deskripsi</th><th></th></tr></thead><tbody>';
     r.params.forEach(p => {
-      pHtml += '<tr><td>' + p.name + '</td><td><span style="color:var(--neon3);font-family:var(--mono);font-size:10px">' + (p.type||'string') + '</span></td><td>' + (p.description||'-') + '</td><td>' + (p.required ? '<span class="badge-req">required</span>' : '<span class="badge-opt">optional</span>') + '</td></tr>';
+      pHtml += '<tr><td>'+p.name+'</td><td style="color:var(--n3);font-family:var(--mono);font-size:10px">'+(p.type||'string')+'</td><td>'+(p.description||'-')+'</td><td>'+(p.required?'<span class="req">required</span>':'<span class="opt">optional</span>')+'</td></tr>';
     });
     pHtml += '</tbody></table></div>';
-    r.params.forEach(p => {
-      inpHtml += '<div class="tf"><label>' + p.name + (p.required ? '*' : '') + '</label><input type="' + (p.type==='url'?'url':'text') + '" id="i_' + cid + '_' + p.name + '" placeholder="' + (p.description||p.name) + '"/></div>';
-    });
-  } else {
-    // Auto-detect from URL pattern
-    const qs = [...r.path.matchAll(/[?&]([^=&]+)=/g)].map(m => m[1]);
-    qs.forEach(q => {
-      inpHtml += '<div class="tf"><label>' + q + '</label><input type="text" id="i_' + cid + '_' + q + '" placeholder="' + q + '"/></div>';
-    });
-    if (!inpHtml) {
-      inpHtml = '<div class="tf" style="flex:1"><label>Override URL</label><input type="text" id="i_' + cid + '_custom" placeholder="' + window.location.origin + r.path + '"/></div>';
-    }
   }
 
-  return '<div class="card" id="' + cid + '">' +
-    '<div class="ch" onclick="tog(\'' + cid + '\')">' +
-      '<span class="method m' + r.method + '">' + r.method + '</span>' +
-      '<span class="cpath">' + fmtPath(r.path) + '</span>' +
-      '<span class="cdesc">' + r.description.substring(0,55) + '</span>' +
-      '<span class="chevron">&#8964;</span>' +
+  // Build input fields — stored by name in the card itself
+  let inpHtml = '';
+  const params = r.params && r.params.length ? r.params : detectQsParams(r.path);
+  params.forEach(p => {
+    inpHtml += '<div class="tf"><label>'+p.name+(p.required?' <span style="color:var(--warn)">*</span>':'')+'</label><input type="'+(p.type==='url'?'url':'text')+'" data-param="'+p.name+'" placeholder="'+(p.description||p.name)+'"></div>';
+  });
+  if (!inpHtml) {
+    inpHtml = '<div class="tf" style="flex:1"><label>Override URL</label><input type="text" data-param="_url" placeholder="'+location.origin+r.path+'"></div>';
+  }
+
+  div.innerHTML =
+    '<div class="card-hd" onclick="tog(\''+cid+'\')">' +
+      '<span class="method m'+r.method+'">'+r.method+'</span>' +
+      '<span class="cpath">'+fmtPath(r.path)+'</span>' +
+      '<span class="cdesc">'+escHtml((r.description||'').substring(0,50))+'</span>' +
+      '<span class="chev">&#8964;</span>' +
     '</div>' +
     '<div class="cbody">' +
       '<div>' +
-        '<div class="section-lbl">Deskripsi</div>' +
-        '<p style="font-size:13px;color:var(--text2);line-height:1.65">' + r.description + '</p>' +
+        '<div class="sec-lbl">Deskripsi</div>' +
+        '<p style="font-size:13px;color:var(--t2);line-height:1.7">'+escHtml(r.description||'')+'</p>' +
         '<div style="margin-top:8px;display:flex;gap:6px;align-items:center">' +
-          '<span style="font-family:var(--mono);font-size:10px;color:var(--muted)">Source:</span>' +
-          '<a href="' + r.scraper_url + '" target="_blank" style="font-family:var(--mono);font-size:10px;color:var(--neon2);text-decoration:none">' + r.scraper_url + '</a>' +
+          '<span style="font-family:var(--mono);font-size:10px;color:var(--mu)">Source:</span>' +
+          '<a href="'+escHtml(r.scraper_url)+'" target="_blank" rel="noopener" style="font-family:var(--mono);font-size:10px;color:var(--n2);text-decoration:none">'+escHtml(r.scraper_url)+'</a>' +
         '</div>' +
       '</div>' +
       pHtml +
       '<div>' +
-        '<div class="section-lbl">Try It</div>' +
+        '<div class="sec-lbl">Try It</div>' +
         '<div class="try-wrap">' +
-          '<div class="url-bar"><span class="url-m">' + r.method + '</span><span class="url-t" id="uv_' + cid + '">' + window.location.origin + r.path + '</span></div>' +
-          '<div class="try-fields">' + inpHtml +
-            '<button class="run" id="rb_' + cid + '" onclick="runIt(\'' + cid + '\',\'' + r.method + '\',\'' + r.path + '\',' + JSON.stringify(r.params||[]) + ')">Run</button>' +
-          '</div>' +
+          '<div class="url-bar"><span class="url-m">'+r.method+'</span><span class="url-t" id="uv_'+cid+'">'+escHtml(location.origin+r.path)+'</span></div>' +
+          '<div class="try-row">'+inpHtml+'<button class="run" id="rb_'+cid+'" type="button">&#9654; Run</button></div>' +
         '</div>' +
-        '<div class="result-box" id="res_' + cid + '">' +
-          '<div class="result-meta">' +
-            '<span id="rs_' + cid + '"></span>' +
-            '<span id="rt_' + cid + '" class="r-time"></span>' +
-            '<button class="r-copy" onclick="cpRes(\'' + cid + '\')">Copy JSON</button>' +
-          '</div>' +
-          '<div class="result-pre"><pre id="rp_' + cid + '"></pre></div>' +
+        '<div class="res-box" id="res_'+cid+'">' +
+          '<div class="res-meta"><span id="rs_'+cid+'"></span><span id="rt_'+cid+'" class="r-ms"></span><button class="r-copy" onclick="cpRes(\''+cid+'\')">Copy JSON</button></div>' +
+          '<div class="res-pre"><pre id="rp_'+cid+'"></pre></div>' +
         '</div>' +
       '</div>' +
-    '</div></div>';
+    '</div>';
+
+  // Attach Run button event listener (not inline onclick — avoids all quoting issues)
+  div.querySelector('#rb_'+cid).addEventListener('click', function() {
+    runCard(cid);
+  });
+
+  return div;
+}
+
+function detectQsParams(path) {
+  return [...path.matchAll(/[?&]([^=&]+)=/g)].map(m => ({ name: m[1], type: 'text', required: false, description: m[1] }));
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function render() {
   const main = document.getElementById('main');
   const fr   = filtered();
-  const nc   = document.getElementById('nav-count');
+  const nc   = document.getElementById('nav-cnt');
   if (nc) nc.textContent = fr.length + ' endpoint';
+
+  main.innerHTML = '';
 
   if (!fr.length) {
     main.innerHTML = ROUTES.length === 0
-      ? '<div class="empty"><div class="empty-icon">⚡</div><h3 style="font-size:18px;font-weight:600">Belum ada endpoint</h3><p style="color:var(--text2);font-size:13px;max-width:360px;line-height:1.7">Generate scraper di Admin Panel, lalu buat API route dari scraper tersebut.</p></div>'
-      : '<div class="empty"><div class="empty-icon">🔍</div><h3 style="font-size:16px;font-weight:600">Tidak ditemukan</h3><p style="color:var(--text2);font-size:13px">Tidak ada endpoint cocok dengan "<b>' + searchQ + '</b>"</p></div>';
+      ? '<div class="empty"><div class="empty-ico">⚡</div><h3 style="font-size:17px;font-weight:600;margin-bottom:8px">Belum ada endpoint</h3><p style="color:var(--t2);font-size:13px;max-width:360px;line-height:1.7">Belum ada API route yang tersedia saat ini.</p></div>'
+      : '<div class="empty"><div class="empty-ico">🔍</div><h3 style="font-size:15px;font-weight:600;margin-bottom:8px">Tidak ditemukan</h3><p style="color:var(--t2);font-size:13px">Tidak ada endpoint cocok dengan "<b>'+escHtml(searchQ)+'</b>"</p></div>';
     return;
   }
 
   // Group by category
   const byc = {};
   fr.forEach(r => { (byc[r.category]||(byc[r.category]=[])).push(r); });
-  let html = '';
+
   Object.entries(byc).forEach(([cat, rows]) => {
-    html += '<div class="grp"><div class="grp-title"><h2>' + cat + '</h2><span class="grp-count">' + rows.length + '</span></div><div class="cards">';
-    rows.forEach((r, i) => { html += buildCard(r, cat + '_' + i); });
-    html += '</div></div>';
+    const grp = document.createElement('div');
+    grp.className = 'grp';
+    grp.innerHTML = '<div class="grp-hd"><h2>'+escHtml(cat)+'</h2><span class="grp-cnt">'+rows.length+'</span></div>';
+    const cards = document.createElement('div');
+    cards.className = 'cards';
+    rows.forEach((r, i) => { cards.appendChild(buildCard(r, cat+'_'+i)); });
+    grp.appendChild(cards);
+    main.appendChild(grp);
   });
-  main.innerHTML = html;
 }
 
 function tog(cid) {
   document.getElementById(cid)?.classList.toggle('open');
 }
 
-async function runIt(cid, method, path, params) {
-  const btn = document.getElementById('rb_' + cid);
-  const resBox = document.getElementById('res_' + cid);
-  const pre    = document.getElementById('rp_' + cid);
-  const st     = document.getElementById('rs_' + cid);
-  const tm     = document.getElementById('rt_' + cid);
+async function runCard(cid) {
+  const card  = document.getElementById(cid);
+  if (!card) return;
+  const btn   = document.getElementById('rb_'+cid);
+  const resBox= document.getElementById('res_'+cid);
+  const pre   = document.getElementById('rp_'+cid);
+  const st    = document.getElementById('rs_'+cid);
+  const tm    = document.getElementById('rt_'+cid);
+
   btn.disabled = true;
-  btn.innerHTML = '<span class="sp"></span>';
+  btn.innerHTML = '<span class="sp"></span> Loading...';
   resBox.style.display = 'none';
 
-  const qs = new URLSearchParams();
-  if (params && params.length) {
-    params.forEach(p => {
-      const v = document.getElementById('i_' + cid + '_' + p.name)?.value?.trim();
-      if (v) qs.set(p.name, v);
-    });
-  } else {
-    const custom = document.getElementById('i_' + cid + '_custom');
-    if (custom?.value?.trim()) {
-      try { new URL(custom.value.startsWith('http') ? custom.value : location.origin + custom.value).searchParams.forEach((v,k) => qs.set(k,v)); } catch {}
-    } else {
-      [...path.matchAll(/[?&]([^=&]+)=/g)].forEach(m => {
-        const v = document.getElementById('i_' + cid + '_' + m[1])?.value?.trim();
-        if (v) qs.set(m[1], v);
-      });
-    }
-  }
+  // Read params from input fields inside this card
+  const method = card.dataset.method || 'GET';
+  const path   = card.dataset.path   || '';
+  const params = JSON.parse(card.dataset.params || '[]');
 
-  const full = location.origin + path + (qs.toString() ? (path.includes('?')?'&':'?') + qs.toString() : '');
-  const uv = document.getElementById('uv_' + cid);
-  if (uv) uv.textContent = full;
+  const qs = new URLSearchParams();
+  card.querySelectorAll('[data-param]').forEach(inp => {
+    const pname = inp.getAttribute('data-param');
+    const val   = (inp.value || '').trim();
+    if (pname === '_url') {
+      // custom URL override — parse its QS into our params
+      if (val) { try { new URL(val.startsWith('http')?val:location.origin+val).searchParams.forEach((v,k)=>qs.set(k,v)); } catch {} }
+    } else if (val) {
+      qs.set(pname, val);
+    }
+  });
+
+  const qStr = qs.toString();
+  const fullUrl = location.origin + path + (qStr ? (path.includes('?')?'&':'?')+qStr : '');
+
+  const uvEl = document.getElementById('uv_'+cid);
+  if (uvEl) uvEl.textContent = fullUrl;
 
   const t0 = Date.now();
   try {
-    const r = await fetch(full, { method });
-    const ms = Date.now() - t0;
-    const data = await r.json();
+    const resp = await fetch(fullUrl, { method });
+    const ms   = Date.now() - t0;
+    const data = await resp.json();
     pre.innerHTML = hlJson(JSON.stringify(data, null, 2));
-    st.innerHTML  = '<span class="r-status-ok">' + r.status + ' OK</span>';
-    tm.textContent = ms + 'ms';
+    st.innerHTML  = '<span class="r-ok">'+resp.status+' '+resp.statusText+'</span>';
+    tm.textContent = ms+'ms';
   } catch(e) {
-    pre.textContent = 'Error: ' + e.message;
-    st.innerHTML = '<span class="r-status-err">Error</span>';
-    tm.textContent = (Date.now()-t0) + 'ms';
+    pre.textContent = 'Error: '+e.message;
+    st.innerHTML = '<span class="r-err">Error</span>';
+    tm.textContent = (Date.now()-t0)+'ms';
   }
   resBox.style.display = 'block';
-  btn.disabled = false; btn.textContent = 'Run';
+  btn.disabled = false;
+  btn.innerHTML = '&#9654; Run';
 }
 
 async function cpRes(cid) {
-  const txt = document.getElementById('rp_' + cid)?.textContent || '';
-  await navigator.clipboard.writeText(txt).catch(()=>{});
-  const b = event.target; b.textContent = 'Copied!'; b.style.color='var(--neon)';
-  setTimeout(() => { b.textContent='Copy JSON'; b.style.color=''; }, 1500);
+  const txt = document.getElementById('rp_'+cid)?.textContent || '';
+  try { await navigator.clipboard.writeText(txt); } catch {}
+  const b = document.querySelector('#res_'+cid+' .r-copy');
+  if (!b) return;
+  b.textContent = 'Copied!'; b.style.color = 'var(--neon)';
+  setTimeout(() => { b.textContent = 'Copy JSON'; b.style.color = ''; }, 1600);
 }
 
 function hlJson(j) {
   return j.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/("(?:\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(?:\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, m => {
-      let s = 'color:var(--neon3)';
-      if (/^"/.test(m)) s = /:$/.test(m) ? 'color:var(--neon2)' : 'color:var(--neon)';
+    .replace(/(\"(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*\"(?:\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, m => {
+      let s = 'color:var(--n3)';
+      if (/^"/.test(m)) s = /:$/.test(m) ? 'color:var(--n2)' : 'color:var(--neon)';
       else if (/true|false/.test(m)) s = 'color:var(--warn)';
-      else if (/null/.test(m)) s = 'color:var(--muted)';
-      return '<span style="' + s + '">' + m + '</span>';
+      else if (/null/.test(m)) s = 'color:var(--mu)';
+      return '<span style="'+s+'">'+m+'</span>';
     });
 }
 
