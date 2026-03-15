@@ -1914,424 +1914,204 @@ app.post("/api/preview-html", async (req, res) => {
   try { fetchResult = await fetchWithBypass(url, () => {}); }
   catch (e) { return res.status(500).json({ error: `Fetch gagal: ${e.message}` }); }
   if (!fetchResult?.html) {
-    return res.status(500).json({ error: fetchResult?.error || "HTML tidak bisa diambil." });
+    return res.status(500).json({ error: fetchResult?.error || "HTML tidak bisa diambil dari URL tersebut." });
   }
 
   let html = fetchResult.html;
 
-  // Tambah base tag supaya resource relative load
+  // ── 1. Pastikan ada <base href> untuk load resource relatif ──
   if (!html.includes("<base")) {
     html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${url}">`);
     if (!html.includes("<base")) html = `<html><head><base href="${url}"></head><body>${html}</body></html>`;
   }
 
-  // Hapus script (biarkan JSON-LD)
-  html = html.replace(/<script(?![^>]*application\/ld\+json)[^>]*>[\s\S]*?<\/script>/gi, "");
+  // ── 2. Hapus SEMUA script (termasuk yang buat overlay/popup) ──
+  html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
   html = html.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "");
+  // Hapus iframe nested (cegah redirect)
+  html = html.replace(/<iframe[^>]*src[^>]*>[\s\S]*?<\/iframe>/gi, "");
 
-  // Inject visual picker
+  // ── 3. Picker script dengan OVERLAY TRICK ────────────────────
+  // Transparent div menutupi seluruh halaman di z-index tertinggi.
+  // pointer-events dimatikan sementara → elementFromPoint menembus
+  // semua overlay/modal/z-index dari website asli.
   const PICKER = `
-<style>
-.__sai_hover{outline:2px solid #00c2ff!important;outline-offset:1px!important;cursor:crosshair!important;background-color:rgba(0,194,255,.07)!important}
-.__sai_selected{outline:3px solid #2effa8!important;background-color:rgba(46,255,168,.1)!important}
-#__sai_badge{
-  position:fixed;top:8px;left:50%;transform:translateX(-50%);
-  background:rgba(0,0,0,.93);color:#2effa8;border:1px solid rgba(46,255,168,.5);
-  padding:5px 14px;border-radius:7px;font:11px/1.5 monospace;
-  z-index:2147483647;pointer-events:none;white-space:nowrap;display:none;
-  max-width:90vw;overflow:hidden;text-overflow:ellipsis;
-}
-#__sai_bar{
-  position:fixed;bottom:0;left:0;right:0;z-index:2147483647;
-  background:rgba(8,12,18,.97);border-top:1px solid rgba(46,255,168,.4);
-  padding:7px 16px;display:flex;align-items:center;gap:10px;
-  font:11px monospace;color:#888;user-select:none;
-  /* toolbar tidak intercept hover/click dari picker */
-  pointer-events:all;
-}
-#__sai_bar button{
-  background:#2effa8;color:#000;border:none;padding:4px 13px;
-  border-radius:5px;cursor:pointer;font:700 11px monospace;
-  pointer-events:all;
-}
-#__sai_bar .d{background:#ff4560;color:#fff;}
-#__sai_bar .cnt{color:#2effa8;font-weight:700;margin:0 2px;}
+<style id="__sai_reset">
+/* Force semua elemen visible & interactable */
+html,body{overflow:auto!important;position:relative!important}
+body{padding-bottom:52px!important}
+[id*="overlay"i],[id*="modal"i],[id*="popup"i],[id*="cookie"i],[id*="gdpr"i],[id*="consent"i],[id*="lightbox"i],[id*="backdrop"i],[id*="blocker"i],[id*="age-gate"i],
+[class*="overlay"i]:not(.__sai_selected):not(.__sai_hover),[class*="modal-backdrop"i],[class*="cookie-banner"i],[class*="cookie-consent"i],[class*="gdpr-banner"i],[class*="consent-banner"i],[class*="popup-overlay"i],[class*="age-gate"i],[class*="paywall"i]{display:none!important;pointer-events:none!important}
+</style>
+<style id="__sai_ui">
+.__sai_hover{outline:3px solid #00c2ff!important;outline-offset:2px!important;background-color:rgba(0,194,255,.06)!important}
+.__sai_selected{outline:3px solid #2effa8!important;outline-offset:2px!important;background-color:rgba(46,255,168,.09)!important}
+#__sai_overlay{position:fixed;inset:0;z-index:2147483645;cursor:crosshair}
+#__sai_badge{position:fixed;top:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.95);color:#2effa8;border:1px solid rgba(46,255,168,.5);padding:5px 16px;border-radius:8px;font:12px/1.5 monospace;z-index:2147483647;pointer-events:none;white-space:nowrap;display:none;max-width:92vw;overflow:hidden;text-overflow:ellipsis;box-shadow:0 4px 24px rgba(0,0,0,.7)}
+#__sai_bar{position:fixed;bottom:0;left:0;right:0;z-index:2147483647;background:rgba(6,7,11,.98);border-top:1px solid rgba(46,255,168,.35);padding:8px 18px;display:flex;align-items:center;gap:12px;font:11px monospace;color:#606880;pointer-events:all;box-shadow:0 -4px 20px rgba(0,0,0,.5)}
+.sai-logo{color:#2effa8;font-weight:700;font-size:12px}
+.sai-cnt-wrap{display:flex;align-items:center;gap:6px;padding:4px 12px;background:rgba(46,255,168,.07);border:1px solid rgba(46,255,168,.2);border-radius:20px}
+.sai-cnt{color:#2effa8;font-weight:700;font-size:14px}
+.sai-hint{margin-left:auto;font-size:10px;opacity:.4}
+#__sai_bar button{padding:5px 16px;border-radius:6px;cursor:pointer;font:700 11px monospace;border:none;pointer-events:all}
+.btn-done{background:#2effa8;color:#000}
+.btn-clear{background:rgba(255,69,96,.1);color:#ff4560;border:1px solid rgba(255,69,96,.3)!important}
 </style>
 <div id="__sai_badge"></div>
 <div id="__sai_bar" data-sai-toolbar="1">
-  <span>Visual Picker</span>
-  <span>Dipilih: <span id="__sai_cnt" class="cnt">0</span> elemen</span>
-  <button data-sai-btn="done" onclick="window.__sai_done()">Selesai</button>
-  <button data-sai-btn="clear" class="d" onclick="window.__sai_clear()">Clear</button>
+  <span class="sai-logo">SAI Picker</span>
+  <div class="sai-cnt-wrap"><span style="font-size:10px;opacity:.6">Dipilih</span><span id="__sai_cnt" class="sai-cnt">0</span></div>
+  <button class="btn-done" type="button" onclick="window.__sai_done()">&#10003; Selesai</button>
+  <button class="btn-clear" type="button" onclick="window.__sai_clear()">Clear</button>
+  <span class="sai-hint">Hover = highlight &nbsp;&#183;&nbsp; Klik = pilih / batalkan</span>
 </div>
+<div id="__sai_overlay"></div>
 <script>
 (function(){
 'use strict';
+var selected=[],hoveredEl=null;
+var SKIP={html:1,body:1,head:1,script:1,style:1,noscript:1,meta:1,link:1,br:1,hr:1};
 
-var selected = [];
-var hovered  = null;
-var SKIP_TAGS = {html:1,body:1,head:1,script:1,style:1,noscript:1,meta:1,link:1};
-
-/* --- Guard: apakah elemen ini bagian dari toolbar SAI? --- */
-function isSAIEl(el) {
-  if (!el || el.nodeType !== 1) return true;
-  var cur = el;
-  while (cur) {
-    if (cur.id === '__sai_bar' || cur.id === '__sai_badge') return true;
-    if (cur.getAttribute && cur.getAttribute('data-sai-toolbar')) return true;
-    if (cur.getAttribute && cur.getAttribute('data-sai-btn')) return true;
-    cur = cur.parentElement;
+function isSAI(el){
+  var cur=el;
+  while(cur){
+    var id=cur.id||'';
+    if(id==='__sai_bar'||id==='__sai_badge'||id==='__sai_overlay')return true;
+    if(cur.getAttribute&&cur.getAttribute('data-sai-toolbar'))return true;
+    cur=cur.parentElement;
   }
   return false;
 }
 
-/* --- Buat selector dasar untuk satu elemen --- */
-function baseSelector(el) {
-  if (!el || el.nodeType !== 1) return null;
-  var tag = el.tagName.toLowerCase();
-  if (SKIP_TAGS[tag]) return null;
-
-  // 1. id unik
-  if (el.id && !/^[0-9]/.test(el.id) && document.querySelectorAll('#'+el.id).length === 1)
-    return '#' + el.id;
-
-  // 2. itemprop (microdata — sangat spesifik)
-  var ip = el.getAttribute('itemprop');
-  if (ip) return tag + '[itemprop="' + ip + '"]';
-
-  // 3. class (ambil 2 class terpanjang, filter utility classes)
-  var cls = Array.from(el.classList || [])
-    .filter(function(c){ return c.length > 2 && c.length < 40 && !/^[0-9a-f]{5,}$/.test(c) && !/^(active|open|show|hide|is-|js-)/.test(c); })
-    .sort(function(a,b){ return b.length - a.length; });
-  if (cls.length) return tag + '.' + cls.slice(0,2).join('.');
-
-  // 4. itemscope container
-  if (el.getAttribute('itemtype')) return tag + '[itemscope]';
-
+function baseSel(el){
+  if(!el||el.nodeType!==1)return null;
+  var tag=(el.tagName||'div').toLowerCase();
+  if(SKIP[tag])return null;
+  if(el.id&&!/^[0-9]/.test(el.id)&&document.querySelectorAll('#'+el.id).length===1)return '#'+el.id;
+  var ip=el.getAttribute&&el.getAttribute('itemprop');
+  if(ip)return tag+'[itemprop="'+ip+'"]';
+  var cls=Array.from(el.classList||[]).filter(function(c){
+    return c.length>2&&c.length<40&&!/^[0-9a-f]{6,}$/.test(c)&&!/^(active|open|show|hide|js-|is-|has-)/.test(c);
+  }).sort(function(a,b){return b.length-a.length;});
+  if(cls.length)return tag+'.'+cls.slice(0,2).join('.');
+  if(el.getAttribute&&el.getAttribute('itemtype'))return tag+'[itemscope]';
   return tag;
 }
 
-/* --- Context-aware selector: include parent section jika selector terlalu generic ---
-   Misal: div.item di dalam section.hot-section → "section.hot-section div.item"
-   Ini yang membedakan Hot Videos vs Latest Videos
-*/
-function buildContextSelector(el) {
-  var childSel = baseSelector(el);
-  if (!childSel) return null;
-
-  // Hitung berapa banyak elemen dengan selector ini di seluruh dokumen
-  var totalCount = 0;
-  try { totalCount = document.querySelectorAll(childSel).length; } catch(e) { return childSel; }
-
-  // Jika <= 3, selector sudah spesifik cukup
-  if (totalCount <= 3) return childSel;
-
-  // Walk up parent untuk cari container yang membatasi scope
-  var parent = el.parentElement;
-  var depth = 0;
-  while (parent && depth < 8) {
-    var pTag = (parent.tagName || '').toLowerCase();
-    if (SKIP_TAGS[pTag] || pTag === 'main' || pTag === 'article') break;
-
-    var pSel = baseSelector(parent);
-    if (!pSel || pSel === pTag) { parent = parent.parentElement; depth++; continue; }
-
-    // Cek berapa banyak childSel di dalam parent ini
-    var scopedCount = 0;
-    try { scopedCount = parent.querySelectorAll(childSel).length; } catch(e) {}
-
-    // Jika parent membatasi scope dengan signifikan (< 50% dari total)
-    if (scopedCount > 0 && scopedCount < totalCount * 0.6) {
-      var combined = pSel + ' ' + childSel;
-      // Verifikasi combined selector valid
-      try {
-        var verifyCount = document.querySelectorAll(combined).length;
-        if (verifyCount > 0 && verifyCount <= scopedCount) {
-          return combined;
-        }
-      } catch(e) {}
+function ctxSel(el){
+  var sel=baseSel(el);
+  if(!sel)return null;
+  var n=0;try{n=document.querySelectorAll(sel).length;}catch(e){return sel;}
+  if(n<=3)return sel;
+  var p=el.parentElement,d=0;
+  while(p&&d<7){
+    var pt=(p.tagName||'').toLowerCase();
+    if(SKIP[pt]||pt==='body'||pt==='main')break;
+    var ps=baseSel(p);
+    if(ps&&ps!==pt){
+      var sc=0;try{sc=p.querySelectorAll(sel).length;}catch(e){}
+      if(sc>0&&sc<n*0.65){
+        var combo=ps+' '+sel;
+        try{var vc=document.querySelectorAll(combo).length;if(vc>0&&vc<=sc)return combo;}catch(e){}
+      }
     }
-
-    parent = parent.parentElement;
-    depth++;
+    p=p.parentElement;d++;
   }
-
-  return childSel;
+  return sel;
 }
 
-/* --- Extract field data dari elemen --- */
-function extractFields(el) {
-  var f = [], seen = {};
-  function add(n, v, s) {
-    if (!n || !v || seen[n]) return;
-    var vs = String(v).trim();
-    if (!vs || vs.length > 300) return;
-    seen[n] = 1;
-    f.push({ name: n, value: vs.substring(0, 200), source: s });
-  }
-
-  // itemprop (microdata — paling akurat)
-  var props = el.querySelectorAll('[itemprop]');
-  Array.from(props).forEach(function(c) {
-    var p = c.getAttribute('itemprop');
-    var v = c.textContent.trim() || c.getAttribute('src') || c.getAttribute('href') || c.getAttribute('content') || '';
-    if (p && v) add(p, v, 'microdata');
+function extractFields(el){
+  var f=[],seen={};
+  function add(n,v,s){if(!n||!v||seen[n])return;var vs=String(v).trim();if(!vs||vs.length>300)return;seen[n]=1;f.push({name:n,value:vs.substring(0,200),source:s});}
+  Array.from(el.querySelectorAll('[itemprop]')).forEach(function(c){var p=c.getAttribute('itemprop');var v=c.textContent.trim()||c.getAttribute('src')||c.getAttribute('href')||c.getAttribute('content')||'';if(p&&v)add(p,v,'microdata');});
+  var h=el.querySelector('h1,h2,h3,h4,h5');if(h&&h.textContent.trim())add('title',h.textContent.trim(),'dom');
+  var a=el.querySelector('a[href]');if(a)add('link',a.href||a.getAttribute('href')||'','dom');
+  var img=el.querySelector('img');
+  if(img){var src=img.getAttribute('data-src')||img.getAttribute('data-lazy')||img.getAttribute('data-original')||img.getAttribute('data-lazy-src')||img.src||'';if(src&&src.indexOf('data:')<0&&src.length>4)add('image',src,'dom');}
+  Array.from(el.attributes||[]).forEach(function(attr){if(!attr.name.startsWith('data-'))return;var v=attr.value;if(!v||v.length>300)return;var n=attr.name.replace('data-','').replace(/-/g,'_');if(['id','v','key','index','aos','wow'].includes(n))return;add(n,v,'data-attr');});
+  Array.from(el.querySelectorAll('span,strong,em,small,p')).forEach(function(sp){var t=sp.textContent.trim();if(!t||t.length>80)return;
+    if(!seen.rating&&/^\d[.,]\d$/.test(t))add('rating',t,'pattern');
+    if(!seen.year&&/^(19|20)\d{2}$/.test(t))add('year',t,'pattern');
+    if(!seen.quality&&/^(HD|FHD|4K|720p|1080p|BLURAY|WEB-?DL|CAM|TS|WEBRIP)$/i.test(t))add('quality',t,'pattern');
+    if(!seen.price&&/^(Rp|\$|USD)?\s?[\d.,]+\s*(rb|jt|k|m)?$/i.test(t)&&t.length<20)add('price',t,'pattern');
   });
-
-  // heading = title
-  var h = el.querySelector('h1,h2,h3,h4,h5');
-  if (h && h.textContent.trim()) add('title', h.textContent.trim(), 'dom');
-
-  // link
-  var a = el.querySelector('a[href]');
-  if (a) add('link', a.href || a.getAttribute('href') || '', 'dom');
-
-  // image (coba semua lazy-load attributes)
-  var img = el.querySelector('img');
-  if (img) {
-    var src = img.getAttribute('data-src') || img.getAttribute('data-lazy') ||
-              img.getAttribute('data-original') || img.getAttribute('data-lazy-src') ||
-              img.getAttribute('data-thumbnail_url') || img.src || '';
-    if (src && src.indexOf('data:') < 0 && src.length > 4) add('image', src, 'dom');
-  }
-
-  // data-* attributes
-  Array.from(el.attributes || []).forEach(function(attr) {
-    if (!attr.name.startsWith('data-')) return;
-    var v = attr.value;
-    if (!v || v.length > 300) return;
-    var n = attr.name.replace('data-','').replace(/-/g,'_');
-    if (['id','v','key','index','aos','wow'].includes(n)) return;
-    add(n, v, 'data-attr');
-  });
-
-  // Scan text patterns: rating, year, quality, price
-  var spans = el.querySelectorAll('span,strong,em,small,div,p');
-  Array.from(spans).forEach(function(sp) {
-    var t = sp.textContent.trim();
-    if (!t || t.length > 100) return;
-    if (!seen.rating  && /^\\d[.,]\\d$/.test(t))                         add('rating',  t, 'pattern');
-    if (!seen.year    && /^(19|20)\\d{2}$/.test(t))                      add('year',    t, 'pattern');
-    if (!seen.quality && /^(HD|FHD|4K|720p|1080p|BLURAY|WEB-?DL|CAM|TS|WEBRIP)$/i.test(t)) add('quality', t, 'pattern');
-    if (!seen.episode && /^(ep|eps?|episode)\\s*\\d+/i.test(t))           add('episode', t, 'pattern');
-    if (!seen.price   && /^(Rp|\\$|USD)?\\s?[\\d.,]+\\s*(rb|jt|k|m)?$/i.test(t) && t.length < 20) add('price', t, 'pattern');
-  });
-
-  // Fallback: ambil teks pertama yang berarti
-  if (!seen.title && !seen.text) {
-    var tx = el.textContent.trim().replace(/\\s+/g,' ').substring(0,100);
-    if (tx) add('text', tx, 'dom');
-  }
-
+  if(!seen.title&&!seen.text){var tx=el.textContent.trim().replace(/\s+/g,' ').substring(0,100);if(tx)add('text',tx,'dom');}
   return f;
 }
 
-function getItemType(el) {
-  var it = el.getAttribute && el.getAttribute('itemtype');
-  return it ? it.split('/').pop() : '';
+function getIT(el){var it=el.getAttribute&&el.getAttribute('itemtype');return it?it.split('/').pop():'';}
+
+function updateBadge(sel,cnt,it){
+  var b=document.getElementById('__sai_badge');
+  if(!b)return;
+  b.style.display='block';
+  b.textContent=(it?'['+it+'] ':'')+sel+' \u2014 '+cnt+' item';
 }
 
-function updateBadge(el) {
-  var badge = document.getElementById('__sai_badge');
-  if (!badge || !el) return;
-  var ctxSel = buildContextSelector(el);
-  if (!ctxSel) { badge.style.display = 'none'; return; }
-  var n = 0;
-  try { n = document.querySelectorAll(ctxSel).length; } catch(e) {}
-  var it = getItemType(el);
-  badge.style.display = 'block';
-  badge.textContent   = (it ? '[' + it + '] ' : '') + ctxSel + ' -- ' + n + ' item';
-}
-
-/* --- Event: mouseover --- */
-function onMouseOver(e) {
-  var el = e.target;
-  if (!el || SKIP_TAGS[(el.tagName||'').toLowerCase()]) return;
-  if (isSAIEl(el)) return;
-
-  if (hovered && hovered !== el) hovered.classList.remove('__sai_hover');
-  hovered = el;
+function doHover(el){
+  if(hoveredEl&&hoveredEl!==el)hoveredEl.classList.remove('__sai_hover');
+  hoveredEl=el;
   el.classList.add('__sai_hover');
-  updateBadge(el);
-  e.stopPropagation();
 }
 
-/* --- Event: mouseout --- */
-function onMouseOut(e) {
-  var el = e.target;
-  if (el && !el.classList.contains('__sai_selected')) el.classList.remove('__sai_hover');
-  var badge = document.getElementById('__sai_badge');
-  if (badge) badge.style.display = 'none';
-}
-
-/* --- Auto-detect pagination patterns di halaman --- */
-function detectPagination() {
-  var p = { found: false, type: null, selector: null, nextUrl: null, paramName: null, totalPages: null };
-
-  // 1. rel="next" link — paling reliable
-  var nextLink = document.querySelector('a[rel="next"]');
-  if (nextLink) {
-    p.found    = true;
-    p.type     = 'rel_next';
-    p.selector = 'a[rel="next"]';
-    p.nextUrl  = nextLink.href;
-    return p;
-  }
-
-  // 2. URL pattern detection (page=2, /page/2, ?p=2, hal=2, etc)
-  var allLinks = Array.from(document.querySelectorAll('a[href]'));
-  var pagePatterns = [
-    { re: /[?&](page|p|hal|pg|paged|num)=(\d+)/i,  param: function(m){ return m[1]; } },
-    { re: /\/page\/(\d+)/i,                           param: function(){ return 'page_path'; } },
-    { re: /\/p\/(\d+)\/?$/i,                          param: function(){ return 'p_path'; } },
-  ];
-  var pageNums = [];
-  var bestLink = null;
-  allLinks.forEach(function(a) {
-    var href = a.href || '';
-    pagePatterns.forEach(function(pat) {
-      var m = href.match(pat.re);
-      if (m) {
-        var num = parseInt(m[m.length-1], 10);
-        if (num > 1) {
-          pageNums.push(num);
-          if (!bestLink || num > parseInt((bestLink.href.match(pat.re)||[0,0]).pop(), 10)) {
-            bestLink = a;
-            p.paramName = pat.param(m);
-          }
-        }
-      }
-    });
-  });
-
-  if (bestLink && pageNums.length > 0) {
-    p.found      = true;
-    p.type       = 'url_param';
-    p.selector   = 'a[href*="page"]';
-    p.nextUrl    = bestLink.href;
-    p.totalPages = Math.max.apply(null, pageNums);
-    return p;
-  }
-
-  // 3. "Load More" / "Next" button
-  var loadMoreSels = [
-    'button[class*="next"]', 'button[class*="load"]', 'button[class*="more"]',
-    'a[class*="next"]',      'a[class*="load"]',      'a[class*="more"]',
-    '.next a', '.pagination .next', '[aria-label="Next"]',
-  ];
-  for (var i = 0; i < loadMoreSels.length; i++) {
-    var btn = document.querySelector(loadMoreSels[i]);
-    if (btn) {
-      p.found    = true;
-      p.type     = 'button_next';
-      p.selector = loadMoreSels[i];
-      p.nextUrl  = btn.href || null;
-      return p;
-    }
-  }
-
-  // 4. Infinite scroll indicator
-  var infiniteSels = [
-    '[class*="infinite"]', '[data-infinite]', '[class*="load-more"]',
-    '[class*="autoload"]', '[id*="infinite"]',
-  ];
-  for (var j = 0; j < infiniteSels.length; j++) {
-    if (document.querySelector(infiniteSels[j])) {
-      p.found    = true;
-      p.type     = 'infinite_scroll';
-      p.selector = infiniteSels[j];
-      return p;
-    }
-  }
-
-  return p;
-}
-
-/* --- Event: click --- */
-function onClick(e) {
-  // PENTING: skip jika ini toolbar SAI
-  if (isSAIEl(e.target)) return;
-
-  e.preventDefault();
-  e.stopPropagation();
-
-  var el = e.target;
-  if (!el || SKIP_TAGS[(el.tagName||'').toLowerCase()]) return;
-
-  var ctxSel = buildContextSelector(el);
-  if (!ctxSel) return;
-
-  var fields    = extractFields(el);
-  var it        = getItemType(el);
-  var allEls    = [];
-  try { allEls = Array.from(document.querySelectorAll(ctxSel)); } catch(x) {}
-  var cnt = allEls.length;
-
-  // Toggle selection
-  var existing = selected.findIndex(function(s){ return s.selector === ctxSel; });
-
-  if (existing >= 0) {
-    // Deselect
-    selected.splice(existing, 1);
-    allEls.forEach(function(x){ x.classList.remove('__sai_selected','__sai_hover'); });
+function doSelect(el){
+  var sel=ctxSel(el);if(!sel)return;
+  var fields=extractFields(el);
+  var it=getIT(el);
+  var all=[];try{all=Array.from(document.querySelectorAll(sel));}catch(e){}
+  var cnt=all.length;
+  var idx=selected.findIndex(function(s){return s.selector===sel;});
+  if(idx>=0){
+    selected.splice(idx,1);
+    all.forEach(function(x){x.classList.remove('__sai_selected','__sai_hover');});
   } else {
-    // Auto-detect pagination setiap kali pilih elemen baru
-    var pag = detectPagination();
-
-    var item = {
-      id:         'v_' + Date.now(),
-      source:     it ? 'microdata' : 'visual',
-      category:   it ? it.toLowerCase() : (el.tagName||'div').toLowerCase(),
-      label:      (it ? '[' + it + '] ' : '') + ctxSel + ' (' + cnt + 'x)',
-      selector:   ctxSel,
-      itemType:   it || null,
-      fields:     fields,
-      rawFields:  fields.map(function(f){ return f.name; }),
-      preview:    fields.slice(0,5).map(function(f){ return f.name + ': ' + f.value.substring(0,60); }),
-      count:      cnt,
-      target:     ctxSel + ' (' + cnt + 'x): ' + fields.map(function(f){ return f.name; }).join(', '),
-      priority:   it ? 20 : 15,
-      pagination: pag,  // Auto-detected pagination info
-    };
-    selected.push(item);
-    allEls.forEach(function(x){ x.classList.add('__sai_selected'); });
-
-    // Update badge dengan pagination info
-    var badge = document.getElementById('__sai_badge');
-    if (badge && pag.found) {
-      badge.style.display = 'block';
-      badge.textContent   = ctxSel + ' + ' + (pag.type === 'infinite_scroll' ? 'infinite scroll' : pag.totalPages ? pag.totalPages + ' halaman' : 'pagination') + ' terdeteksi';
-    }
+    selected.push({id:'v_'+Date.now()+'_'+Math.random().toString(36).slice(2),source:it?'microdata':'visual',category:it?it.toLowerCase():(el.tagName||'div').toLowerCase(),label:(it?'['+it+'] ':'')+sel+' ('+cnt+'x)',selector:sel,itemType:it||null,fields:fields,rawFields:fields.map(function(f){return f.name;}),preview:fields.slice(0,5).map(function(f){return f.name+': '+f.value.substring(0,60);}),count:cnt,target:sel+' ('+cnt+'x): '+fields.map(function(f){return f.name;}).join(', '),priority:it?20:15});
+    all.forEach(function(x){x.classList.add('__sai_selected');});
   }
-
-  document.getElementById('__sai_cnt').textContent = selected.length;
-  window.parent.postMessage({ type: '__sai_selection', items: selected }, '*');
+  document.getElementById('__sai_cnt').textContent=selected.length;
+  try{window.parent.postMessage({type:'__sai_selection',items:selected},'*');}catch(e){}
 }
 
-/* --- Toolbar actions --- */
-window.__sai_done = function() {
-  window.parent.postMessage({ type: '__sai_done', items: selected }, '*');
-};
+/* ═══ OVERLAY TRICK ════════════════════════════════════════
+   Transparent div di z-index tertinggi menangkap semua event.
+   Untuk detect elemen: matikan pointer-events overlay sebentar
+   → elementFromPoint → nyalakan lagi.
+   MENEMBUS semua overlay/modal/z-index dari website asli.
+   ════════════════════════════════════════════════════════ */
+var ov=document.getElementById('__sai_overlay');
 
-window.__sai_clear = function() {
-  document.querySelectorAll('.__sai_selected,.__sai_hover').forEach(function(el){
-    el.classList.remove('__sai_selected','__sai_hover');
-  });
-  selected = [];
-  document.getElementById('__sai_cnt').textContent = '0';
-  window.parent.postMessage({ type: '__sai_selection', items: [] }, '*');
-};
+ov.addEventListener('mousemove',function(e){
+  ov.style.pointerEvents='none';
+  var el=document.elementFromPoint(e.clientX,e.clientY);
+  ov.style.pointerEvents='';
+  if(!el||isSAI(el)||SKIP[(el.tagName||'').toLowerCase()])return;
+  doHover(el);
+  var sel=ctxSel(el);
+  if(sel){var n=0;try{n=document.querySelectorAll(sel).length;}catch(e){}updateBadge(sel,n,getIT(el));}
+});
 
-/* --- Attach events dengan capture=false untuk mouseover/out, capture=true untuk click tapi dengan guard --- */
-document.addEventListener('mouseover', onMouseOver, false);
-document.addEventListener('mouseout',  onMouseOut,  false);
-document.addEventListener('click',     onClick,     true);
+ov.addEventListener('mouseleave',function(){
+  if(hoveredEl){hoveredEl.classList.remove('__sai_hover');hoveredEl=null;}
+  var b=document.getElementById('__sai_badge');if(b)b.style.display='none';
+});
 
-window.parent.postMessage({ type: '__sai_ready' }, '*');
+ov.addEventListener('click',function(e){
+  e.preventDefault();e.stopPropagation();
+  ov.style.pointerEvents='none';
+  var el=document.elementFromPoint(e.clientX,e.clientY);
+  ov.style.pointerEvents='';
+  if(!el||isSAI(el)||SKIP[(el.tagName||'').toLowerCase()])return;
+  doSelect(el);
+});
+
+window.__sai_done=function(){try{window.parent.postMessage({type:'__sai_done',items:selected},'*');}catch(e){}};
+window.__sai_clear=function(){document.querySelectorAll('.__sai_selected,.__sai_hover').forEach(function(el){el.classList.remove('__sai_selected','__sai_hover');});selected=[];hoveredEl=null;document.getElementById('__sai_cnt').textContent='0';try{window.parent.postMessage({type:'__sai_selection',items:[]},'*');}catch(e){}};
+
+try{window.parent.postMessage({type:'__sai_ready'},'*');}catch(e){}
 })();
 </script>`;
 
-  if (html.includes("</body>")) html = html.replace("</body>", PICKER + "</body>");
+  if (html.includes("</body>")) html = html.replace(/<\/body>/i, PICKER + "\n</body>");
   else html += PICKER;
 
   res.json({ success: true, url, layer: fetchResult.layer, html });
