@@ -61,12 +61,16 @@ app.use("/api/scraper/:id/fix",  aiLimiter);
 app.use("/api/scraper/:id/edit", aiLimiter);
 
 // ── Static Files ──────────────────────────────────────────────
-// Production: serve React build. Development: Vite dev server handle frontend.
+// Production: serve React build di /admin (bukan /)
+// / dipakai untuk REST API hasil generate AI
 if (IS_PROD) {
   const clientDist = path.join(__dirname, "client", "dist");
   if (fs.existsSync(clientDist)) {
-    app.use(express.static(clientDist));
-    console.log("[server] Serving React build dari client/dist");
+    // Serve static assets (JS, CSS, img) tanpa prefix
+    app.use("/admin", express.static(clientDist));
+    // Serve static assets di root juga untuk resource files
+    app.use(express.static(clientDist, { index: false }));
+    console.log("[server] Serving React build di /admin");
   }
 }
 
@@ -407,8 +411,66 @@ ${SHARED}
 }
 
 // ── Helper: Build Try Schema ──────────────────────────────────
-function buildTrySchema(url, target) {
+// Auto-detect query params dari kode yang di-generate
+function buildTrySchema(url, target, generatedCode) {
   const host = (() => { try { return new URL(url).hostname.replace("www.", ""); } catch { return url; } })();
+
+  // ── 1. Auto-detect dari kode Express router yang di-generate ──
+  if (generatedCode) {
+    const params = [];
+    const seen   = new Set();
+
+    // Deteksi pattern: const { mode, query, url: itemUrl, limit } = req.query
+    const destructureMatch = generatedCode.match(/const\s*\{([^}]+)\}\s*=\s*req\.query/);
+    if (destructureMatch) {
+      const parts = destructureMatch[1].split(",").map(s => s.trim());
+      parts.forEach(part => {
+        // Handle alias: "url: itemUrl" → name=url
+        const name = part.split(":")[0].trim().replace(/\s.*/, "");
+        if (!name || seen.has(name)) return;
+        seen.add(name);
+
+        // Tentukan tipe berdasarkan nama
+        let type = "text", label = name, placeholder = "";
+        if (name === "url" || name.endsWith("url") || name.endsWith("Url") || name.endsWith("URL")) {
+          type = "url"; label = `URL ${name}`; placeholder = "https://...";
+        } else if (name === "mode") {
+          // Ambil mode values dari kode
+          const modeVals = [...generatedCode.matchAll(/mode\s*===?\s*['"]([^'"]+)['"]/g)].map(m => m[1]);
+          label = "Mode"; placeholder = modeVals.length ? modeVals.join(" | ") : "list";
+          type  = "text";
+        } else if (name === "query" || name === "q" || name === "search" || name === "keyword") {
+          type = "text"; label = "Kata Pencarian"; placeholder = "Masukkan keyword...";
+        } else if (name === "limit" || name === "page" || name === "offset") {
+          type = "number"; label = name.charAt(0).toUpperCase() + name.slice(1); placeholder = "10";
+        } else {
+          label = name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+          placeholder = name;
+        }
+
+        params.push({ name, label, type, placeholder, required: name === "mode" || name === "url" });
+      });
+    }
+
+    // Deteksi manual: req.query.xxx patterns
+    if (params.length === 0) {
+      const qMatches = [...generatedCode.matchAll(/req\.query\.([a-zA-Z_]+)/g)];
+      qMatches.forEach(m => {
+        const name = m[1];
+        if (seen.has(name)) return;
+        seen.add(name);
+        let type = "text", label = name, placeholder = name;
+        if (name.toLowerCase().includes("url")) { type = "url"; placeholder = "https://..."; }
+        else if (["limit","page","count","num"].includes(name)) { type = "number"; placeholder = "10"; }
+        label = name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+        params.push({ name, label, type, placeholder, required: false });
+      });
+    }
+
+    if (params.length > 0) return params;
+  }
+
+  // ── 2. Known domain schemas ───────────────────────────────
   const schemas = {
     "tiktok.com":    [{ name: "video_url",   label: "URL Video TikTok",    type: "url",    placeholder: "https://www.tiktok.com/@user/video/123", required: true }],
     "instagram.com": [{ name: "post_url",    label: "URL Post Instagram",  type: "url",    placeholder: "https://www.instagram.com/p/XXXXX/", required: true }],
@@ -419,15 +481,16 @@ function buildTrySchema(url, target) {
     "tokopedia.com": [{ name: "product_url", label: "URL Produk Tokopedia",type: "url",    placeholder: "https://www.tokopedia.com/xxx", required: true }],
     "linkedin.com":  [{ name: "profile_url", label: "URL Profil/Perusahaan",type: "url",   placeholder: "https://www.linkedin.com/in/user", required: true }],
   };
-
   for (const [domain, schema] of Object.entries(schemas)) {
     if (host.includes(domain)) return schema;
   }
 
+  // ── 3. Generic default schema ─────────────────────────────
   return [
-    { name: "target_url", label: "URL Target Scraping",    type: "url",    placeholder: url, required: true },
-    { name: "selector",   label: "CSS Selector (opsional)",type: "text",   placeholder: "div.content, .price, h1", required: false },
-    { name: "limit",      label: "Limit hasil (opsional)", type: "number", placeholder: "10", required: false },
+    { name: "mode",   label: "Mode",                     type: "text",   placeholder: "list",  required: true },
+    { name: "query",  label: "Kata Pencarian (search)",   type: "text",   placeholder: "keyword...", required: false },
+    { name: "url",    label: "URL Item (detail)",          type: "url",    placeholder: "https://...", required: false },
+    { name: "limit",  label: "Limit hasil (opsional)",     type: "number", placeholder: "50",  required: false },
   ];
 }
 
@@ -3258,7 +3321,7 @@ ATURAN KODE — WAJIB DIIKUTI:
     log("    Menyimpan ke registry...");
 
     const id        = uuidv4();
-    const trySchema = buildTrySchema(url, target);
+    const trySchema = buildTrySchema(url, target, code);
     const host      = (() => { try { return new URL(url).hostname.replace("www.", ""); } catch { return "site"; } })();
     const extMap    = { nodejs: moduleType === "esm" ? "mjs" : moduleType === "esm-ts" ? "ts" : "js", python: "py", php: "php" };
 
@@ -3353,7 +3416,7 @@ INGAT: Tulis SEMUA kode dari awal sampai akhir. JANGAN potong atau skip bagian a
     code      = code.replace(/^```[\w]*\n?/gm, "").replace(/^```\n?/gm, "").trim();
 
     const id        = uuidv4();
-    const trySchema = buildTrySchema(url, target);
+    const trySchema = buildTrySchema(url, target, code);
     const host      = (() => { try { return new URL(url).hostname.replace("www.", ""); } catch { return "site"; } })();
     const extMap    = { nodejs: "js", python: "py", php: "php" };
 
@@ -3568,17 +3631,63 @@ app.get("/api/scraper/:id/history", (req, res) => {
 });
 
 // ── POST /api/scraper/:id/try ─────────────────────────────────
-// v4: REAL SCRAPER — inline fetch+parse, return actual JSON data
+// Smart try: jika scraper punya registered Express route → forward ke sana
+// Jika tidak → inline fetch+parse
 app.post("/api/scraper/:id/try", async (req, res) => {
   const entry = registry.getById(req.params.id);
   if (!entry) return res.status(404).json({ error: "Scraper tidak ditemukan" });
 
-  const inputURL = req.body.target_url || req.body.video_url || req.body.post_url
-    || req.body.product_url || req.body.tweet_url || req.body.url || entry.url;
+  // ── Cek apakah scraper punya registered API route ─────────
+  // Jika ada, forward req.body sebagai query params ke route tersebut
+  const apiRoutes = entry.apiRoutes || [];
+  if (apiRoutes.length > 0) {
+    const route    = apiRoutes[0]; // pakai route pertama
+    const routeUrl = `http://localhost:${PORT}${route.path}`;
+    try {
+      // Forward semua req.body params sebagai query string
+      const qs = new URLSearchParams(
+        Object.fromEntries(Object.entries(req.body).filter(([,v]) => v !== undefined && v !== ""))
+      ).toString();
+      const callUrl = qs ? `${routeUrl}?${qs}` : routeUrl;
+      console.log(`[try-router] Forwarding ke: ${callUrl}`);
+      const resp = await axios.get(callUrl, { timeout: 60000 });
+      return res.json({ success: true, scraped_data: resp.data, route: route.path, _source: "registered-route" });
+    } catch (e) {
+      console.log(`[try-router] Route call gagal: ${e.message}, fallback ke inline`);
+    }
+  }
+
+  // ── Inline fallback: ambil semua params dari body ─────────
+  const mode     = req.body.mode || "list";
+  const query    = req.body.query || req.body.q || req.body.search || req.body.keyword || "";
+  const itemUrl  = req.body.url || req.body.target_url || req.body.video_url ||
+                   req.body.post_url || req.body.product_url || req.body.tweet_url || entry.url;
+  const limit    = parseInt(req.body.limit || "20", 10);
+
+  // Tentukan URL target berdasarkan mode
+  let targetUrl = entry.url;
+  if (mode === "detail" && itemUrl !== entry.url) {
+    targetUrl = itemUrl;
+  } else if ((mode === "search" || mode === "list") && query) {
+    // Coba deteksi pola search URL dari kode yang di-generate
+    const searchPatterns = [
+      `${entry.url}?s=${encodeURIComponent(query)}`,
+      `${entry.url}?q=${encodeURIComponent(query)}`,
+      `${entry.url}?search=${encodeURIComponent(query)}`,
+      `${entry.url}?keyword=${encodeURIComponent(query)}`,
+    ];
+    // Ambil pola dari kode jika ada
+    const codeSearch = entry.code?.match(/\$\{?(?:BASE_URL|baseUrl)\}?\s*\+?\s*[`'"](.*?(?:s=|q=|search=|keyword=))[`'"]/);
+    if (codeSearch) {
+      targetUrl = `${entry.url}${codeSearch[1]}${encodeURIComponent(query)}`;
+    } else {
+      targetUrl = searchPatterns[0];
+    }
+  }
 
   // ── Browser-like headers ──────────────────────────────────
   const HEADERS = {
-    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br",
@@ -3590,7 +3699,6 @@ app.post("/api/scraper/:id/try", async (req, res) => {
     "Upgrade-Insecure-Requests": "1",
   };
 
-  // ── Helper: fetch page ────────────────────────────────────
   const fetchPage = async (url) => {
     const resp = await axios.get(url, {
       headers: HEADERS, timeout: 25000, maxRedirects: 5,
@@ -3602,10 +3710,8 @@ app.post("/api/scraper/:id/try", async (req, res) => {
   // ── Helper: extract JSON-LD / __NEXT_DATA__ / embedded JSON ──
   const extractEmbeddedJson = (html) => {
     if (!html) return null;
-    // 1) __NEXT_DATA__
     const nextData = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
     if (nextData) { try { return { _source: "NEXT_DATA", data: JSON.parse(nextData[1]) }; } catch {} }
-    // 2) JSON-LD
     const jsonLds = [...html.matchAll(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi)];
     for (const m of jsonLds) {
       try {
@@ -3613,196 +3719,118 @@ app.post("/api/scraper/:id/try", async (req, res) => {
         if (obj["@type"] || obj.name || obj.price) return { _source: "JSON-LD", data: obj };
       } catch {}
     }
-    // 3) window.__STATE__ / window.STATE / window.pageData
     const stateMatches = html.match(/window\.__(?:STATE|INITIAL_STATE|DATA|pageData|props)__\s*=\s*(\{[\s\S]*?\});/);
     if (stateMatches) { try { return { _source: "window.__STATE__", data: JSON.parse(stateMatches[1]) }; } catch {} }
     return null;
   };
 
-  // ── Detect site & use specialist parser ───────────────────
-  const host = (() => { try { return new URL(inputURL).hostname.toLowerCase().replace("www.",""); } catch { return ""; } })();
+  // ── Smart inline parser ───────────────────────────────────
+  const inlineParser = async (html, url) => {
+    const $  = cheerio.load(html);
+    const h  = (() => { try { return new URL(url).hostname.toLowerCase().replace("www.",""); } catch { return ""; } })();
+    const result = { url, site: h, mode, parsed_by: "smartscrape-inline-v4" };
 
-  const SITE_PARSERS = {
-    "tokopedia.com": async (html, url) => {
-      const embedded = extractEmbeddedJson(html);
-      let result = { url, site: "tokopedia.com", parsed_by: "inline-parser-v4" };
+    // Coba gunakan selector dari entry.trySchema atau kode yang di-generate
+    const mainSel = (() => {
+      // Cari selector dari kode generate
+      const sMatch = entry.code?.match(/\$\(\s*["']([^"']+)["']\s*\)\.each/);
+      return sMatch?.[1] || null;
+    })();
 
-      // Try NEXT_DATA first (most reliable for Tokopedia)
-      if (embedded?.data) {
-        const d = embedded.data;
-        // Navigate Tokopedia's NEXT_DATA structure
-        const pdp = d?.props?.pageProps?.productSSRData?.pdpGetLayout?.basicInfo ||
-                    d?.props?.pageProps?.layoutData?.pdpGetLayout?.basicInfo ||
-                    d?.props?.pageProps;
-        if (pdp?.name) {
-          result = {
-            ...result,
-            nama_produk:   pdp.name,
-            harga:         pdp.price?.value ? `Rp ${pdp.price.value.toLocaleString("id-ID")}` : pdp.priceInfo?.price || "N/A",
-            rating:        pdp.rating?.averageRate || pdp.stats?.rating || "N/A",
-            jumlah_review: pdp.stats?.reviewCount || pdp.rating?.totalRating || 0,
-            terjual:       pdp.stats?.txSuccess || 0,
-            stok:          pdp.stock?.value || "Ada",
-            toko:          pdp.shopInfo?.name || pdp.shopName || "N/A",
-            lokasi:        pdp.shopInfo?.location || "N/A",
-            kondisi:       pdp.condition === 1 ? "Baru" : "Bekas",
-            berat:         pdp.weight ? `${pdp.weight} gram` : "N/A",
-            kategori:      pdp.breadcrumb?.map(b => b.name).join(" > ") || "N/A",
-            gambar:        (pdp.media?.photos || []).slice(0,3).map(p => p.urlThumbnail || p.url300 || p.url),
-            deskripsi:     (pdp.description?.replace(/<[^>]+>/g,"").substring(0,300) || "N/A") + "...",
-            url_produk:    url,
-            _source:       embedded._source,
-          };
-          return result;
-        }
+    if (mainSel) {
+      const items = [];
+      try {
+        $(mainSel).slice(0, limit).each((_, el) => {
+          const item = {};
+          // itemprop fields
+          $(el).find("[itemprop]").each((_, c) => {
+            const p = $(c).attr("itemprop") || "";
+            const v = $(c).text().trim() || $(c).attr("src") || $(c).attr("href") || $(c).attr("content") || "";
+            if (p && v) item[p] = v.substring(0, 200);
+          });
+          // fallback fields
+          if (!item.name) {
+            const h1 = $(el).find("h1,h2,h3,h4").first().text().trim();
+            if (h1) item.title = h1;
+          }
+          const a = $(el).find("a[href]").first();
+          if (a.length) item.link = a.attr("href") || "";
+          const img = $(el).find("img").first();
+          if (img.length) {
+            item.image = img.attr("data-src") || img.attr("data-lazy") || img.attr("data-original") || img.attr("src") || "";
+          }
+          // rating, year, quality patterns
+          $(el).find("span,strong,small,div").each((_, sp) => {
+            const t = $(sp).text().trim();
+            if (!item.rating  && /^\d[.,]\d$/.test(t)) item.rating  = t;
+            if (!item.year    && /^(19|20)\d{2}$/.test(t)) item.year = t;
+            if (!item.quality && /^(HD|FHD|4K|720p|1080p|BLURAY|WEB-DL)$/i.test(t)) item.quality = t;
+          });
+          if (Object.keys(item).length > 0) items.push(item);
+        });
+      } catch {}
+      if (items.length > 0) {
+        result.total         = items.length;
+        result.results       = items;
+        result.selector_used = mainSel;
+        result._note         = `${items.length} item ditemukan dengan selector "${mainSel}"`;
+        return result;
       }
-
-      // Fallback: cheerio HTML parsing
-      if (cheerio) {
-        const $ = cheerio.load(html);
-        result = {
-          ...result,
-          nama_produk:   $("h1[data-testid='lblPDPDetailProductName'], h1.css-1os9jjn, [class*='product-name'] h1").first().text().trim() || $("h1").first().text().trim() || "N/A",
-          harga:         $("[data-testid='lblPDPDetailProductPrice'], .css-o0erv3, [class*='product-price']").first().text().trim() || "N/A",
-          rating:        $("[data-testid='icnStarRating'], .css-1c2dfid, [class*='star-rating']").first().text().trim() || "N/A",
-          toko:          $("[data-testid='llbPDPFooterShopName'], .css-1xs1wfr, [class*='shop-name']").first().text().trim() || "N/A",
-          deskripsi:     $("[data-testid='lblPDPDescriptionProduk'], [class*='product-desc']").first().text().trim().substring(0,300) || "N/A",
-          gambar:        $("img[data-testid='PDPMainImage'], .main-product-image img, [class*='product-image'] img").map((_,el) => $(el).attr("src") || $(el).attr("data-src")).get().filter(Boolean).slice(0,3),
-          url_produk:    url,
-          _source:       "cheerio-html-parser",
-          _note:         "Tokopedia memblokir akses langsung. Data mungkin tidak lengkap. Gunakan scraper dengan puppeteer stealth untuk data lengkap.",
-        };
-      }
-      return result;
-    },
-
-    "shopee.co.id": async (html, url) => {
-      const embedded = extractEmbeddedJson(html);
-      if (!cheerio) return { url, site: "shopee.co.id", error: "cheerio tidak tersedia" };
-      const $ = cheerio.load(html);
-      return {
-        url, site: "shopee.co.id", parsed_by: "inline-parser-v4",
-        nama_produk: $("._2rI3BH, [class*='pdp-product-title']").first().text().trim() || $("h1").first().text().trim() || "N/A",
-        harga:       $("._3n5NQx, [class*='pdp-price']").first().text().trim() || "N/A",
-        toko:        $("[class*='seller-name'], ._1VqRBa").first().text().trim() || "N/A",
-        _note:       "Shopee memerlukan browser automation untuk data lengkap",
-      };
-    },
-
-    "youtube.com": async (html, url) => {
-      const embedded = extractEmbeddedJson(html);
-      const videoId = url.match(/v=([^&]+)/)?.[1] || url.match(/youtu\.be\/([^?]+)/)?.[1];
-      if (embedded?.data) {
-        const page = embedded.data;
-        const vd = page?.props?.pageProps?.videoDetails || page?.videoDetails;
-        if (vd) return { url, site: "youtube.com", parsed_by: "NEXT_DATA",
-          judul: vd.title, channel: vd.author, views: vd.viewCount, durasi: vd.lengthSeconds + "s",
-          thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`, video_id: videoId };
-      }
-      if (!cheerio) return { url, site: "youtube.com", video_id: videoId };
-      const $ = cheerio.load(html);
-      return {
-        url, site: "youtube.com", parsed_by: "inline-parser-v4",
-        judul:     $("meta[name='title']").attr("content") || $("title").text().replace(" - YouTube",""),
-        channel:   $("link[itemprop='name']").attr("content") || "N/A",
-        thumbnail: videoId ? `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg` : "N/A",
-        video_id:  videoId || "N/A",
-      };
-    },
-  };
-
-  // ── Generic fallback parser ───────────────────────────────
-  const genericParser = async (html, url) => {
-    if (!cheerio) return { url, error: "Parser tidak tersedia", note: "Install cheerio di server" };
-    const $ = cheerio.load(html);
-
-    // Remove scripts, styles, nav, footer
-    $("script, style, nav, footer, header, noscript, svg, iframe").remove();
-
-    // Extract based on target field
-    const target  = entry.target.toLowerCase();
-    const result  = { url, site: host, parsed_by: "generic-cheerio-parser", target: entry.target };
-
-    // Prices
-    if (target.includes("harga") || target.includes("price")) {
-      const priceEls = $("[class*='price'],[class*='harga'],[itemprop='price']").map((_,el) => $(el).text().trim()).get().filter(Boolean);
-      result.harga = priceEls.slice(0,3);
     }
-    // Product names / titles
+
+    // Generic fallback
+    $("script, style, nav, footer, header, noscript, svg, iframe").remove();
     result.judul_halaman = $("title").text().trim();
-    result.h1 = $("h1").map((_,el) => $(el).text().trim()).get().filter(Boolean).slice(0,3);
-    result.h2 = $("h2").map((_,el) => $(el).text().trim()).get().filter(Boolean).slice(0,5);
-    // Meta
+    result.h1            = $("h1").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 3);
+    result.h2            = $("h2").map((_, el) => $(el).text().trim()).get().filter(Boolean).slice(0, 5);
     result.meta_description = $("meta[name='description']").attr("content") || "N/A";
-    result.og_title         = $("meta[property='og:title']").attr("content") || "N/A";
-    result.og_description   = $("meta[property='og:description']").attr("content") || "N/A";
-    result.og_image         = $("meta[property='og:image']").attr("content") || "N/A";
-    // Images
-    result.gambar = $("img[src]").map((_,el) => $(el).attr("src")).get()
-      .filter(s => s && !s.includes("data:") && s.length > 10).slice(0,5);
-    // Links
-    result.links_count = $("a[href]").length;
-    // Tables
-    const tables = [];
-    $("table").each((_,tbl) => {
-      const rows = $(tbl).find("tr").map((_,tr) => $(tr).find("td,th").map((_,td) => $(td).text().trim()).get()).get();
-      if (rows.length) tables.push(rows.slice(0,5));
-    });
-    if (tables.length) result.tabel = tables.slice(0,2);
-    // Embedded JSON
+    result.og_title      = $("meta[property='og:title']").attr("content") || "N/A";
+    result.og_image      = $("meta[property='og:image']").attr("content") || "N/A";
+    result.gambar        = $("img[src]").map((_, el) => $(el).attr("src")).get().filter(s => s && !s.includes("data:") && s.length > 10).slice(0, 5);
+    result.links_count   = $("a[href]").length;
     const embedded = extractEmbeddedJson(html);
     if (embedded) result._embedded_json_source = embedded._source;
-
     return result;
   };
 
-  // ── MAIN EXECUTION ────────────────────────────────────────
   try {
-    console.log(`[try-v4] Fetching: ${inputURL}`);
-    const html = await fetchPage(inputURL);
-
-    // Pick specialist parser or generic
-    let scraped = null;
-    for (const [domain, parser] of Object.entries(SITE_PARSERS)) {
-      if (host.includes(domain)) {
-        scraped = await parser(html, inputURL);
-        break;
-      }
-    }
-    if (!scraped) scraped = await genericParser(html, inputURL);
-
-    const fw = await detectFirewall(inputURL).catch(() => ({ bypass_recommended: false, details: [] }));
+    console.log(`[try-v4] mode=${mode} url=${targetUrl}`);
+    const html    = await fetchPage(targetUrl);
+    const scraped = await inlineParser(html, targetUrl);
+    const fw      = await detectFirewall(targetUrl).catch(() => ({ bypass_recommended: false, details: [] }));
 
     return res.json({
       success:      true,
       scraped_data: scraped,
-      url:          inputURL,
+      url:          targetUrl,
+      mode,
+      query:        query || null,
       scraper_id:   entry.id,
       scraper_name: entry.name,
       lang:         entry.lang,
       target:       entry.target,
       firewall:     fw,
       scraped_at:   new Date().toISOString(),
-      note:         "Data diambil langsung oleh server via inline HTML parser. Untuk data lebih lengkap, download & jalankan kode scraper dengan puppeteer.",
       download_url: `/api/scraper/${entry.id}/download`,
       zip_url:      `/api/scraper/${entry.id}/zip`,
     });
 
   } catch (err) {
-    // Jika fetch gagal (Cloudflare block, timeout, dll)
-    const fw = await detectFirewall(inputURL).catch(() => null);
+    const fw = await detectFirewall(targetUrl).catch(() => null);
     return res.status(500).json({
       success:    false,
       error:      err.message,
-      url:        inputURL,
+      url:        targetUrl,
+      mode,
       firewall:   fw,
       scraper_id: entry.id,
-      fix_hint:   `Site memblokir akses langsung. Download scraper & jalankan dengan puppeteer stealth di lokal/VPS.`,
+      fix_hint:   "Site memblokir akses langsung. Download & jalankan scraper di lokal/VPS dengan puppeteer.",
       download:   `/api/scraper/${entry.id}/download`,
       zip:        `/api/scraper/${entry.id}/zip`,
     });
   }
 });
+
 
 // ══════════════════════════════════════════════════════════════
 //  AI AUTO-FIX ENGINE
@@ -4351,22 +4379,853 @@ app.delete("/api/c3/file/:name", async (req, res) => {
   }
 });
 
-// ── Fallback (Production React build) ────────────────────────
-// HANYA untuk non-API routes agar request /api/* tetap return JSON error
-if (IS_PROD) {
-  app.get("*", (req, res) => {
-    // Jangan serve index.html untuk /api/* — kembalikan 404 JSON
-    if (req.path.startsWith("/api/") || req.path.startsWith("/health")) {
-      return res.status(404).json({ error: "Endpoint tidak ditemukan", path: req.path });
-    }
-    const idx = path.join(__dirname, "client", "dist", "index.html");
-    if (fs.existsSync(idx)) {
-      res.sendFile(idx);
-    } else {
-      res.status(404).json({ error: "Frontend build tidak ditemukan. Jalankan: npm run build" });
-    }
+// ══════════════════════════════════════════════════════════════
+//  GET / — SmartScrapeAI REST API Portal (HTML)
+//  Tampilan lengkap semua generated API endpoints
+// ══════════════════════════════════════════════════════════════
+app.get("/", (req, res) => {
+  const all    = registry.getAll();
+  const routes = all.flatMap(s =>
+    (s.apiRoutes || []).map(r => ({
+      method:      r.method,
+      path:        r.path,
+      name:        r.name,
+      description: r.description || `Scraper for ${s.url}`,
+      category:    r.category || "general",
+      params:      r.params || [],
+      scraper:     s.name,
+      scraper_url: s.url,
+      lang:        s.lang,
+      created:     s.createdAt,
+    }))
+  );
+
+  const categories = [...new Set(routes.map(r => r.category))].sort();
+  const stats = {
+    total:     routes.length,
+    scrapers:  all.length,
+    categories: categories.length,
+    uptime:    Math.floor(process.uptime()),
+  };
+
+  const routesJson = JSON.stringify(routes);
+  const categoriesJson = JSON.stringify(categories);
+  const statsJson = JSON.stringify(stats);
+
+  const html = `<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SmartScrapeAI — REST API</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#08090d;--bg2:#0e1018;--bg3:#141720;
+  --border:#1e2235;--border2:#2a2f45;
+  --neon:#2effa8;--neon2:#00c2ff;--neon3:#a78bfa;
+  --text:#e8eaf0;--text2:#8b93b0;--muted:#4a5068;
+  --danger:#ff4560;--warn:#ffb84d;
+  --mono:"JetBrains Mono",monospace;
+  --head:"Space Grotesk",sans-serif;
+}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--head);min-height:100vh;overflow-x:hidden}
+
+/* Ambient glow */
+body::before{
+  content:"";position:fixed;top:-40%;left:-20%;width:60%;height:60%;
+  background:radial-gradient(ellipse,rgba(46,255,168,.04) 0%,transparent 70%);
+  pointer-events:none;z-index:0;
+}
+body::after{
+  content:"";position:fixed;top:20%;right:-20%;width:50%;height:50%;
+  background:radial-gradient(ellipse,rgba(0,194,255,.03) 0%,transparent 70%);
+  pointer-events:none;z-index:0;
+}
+
+/* ── TOPBAR ── */
+.topbar{
+  position:sticky;top:0;z-index:100;
+  background:rgba(8,9,13,.92);backdrop-filter:blur(20px);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:16px;
+  padding:0 24px;height:56px;
+}
+.logo{
+  display:flex;align-items:center;gap:10px;
+  font-family:var(--mono);font-size:15px;font-weight:700;
+  color:var(--neon);text-decoration:none;letter-spacing:-.5px;
+}
+.logo span{color:var(--text2);font-weight:400}
+.topbar-badge{
+  font-family:var(--mono);font-size:9px;padding:2px 8px;
+  border-radius:20px;border:1px solid rgba(46,255,168,.3);
+  color:var(--neon);background:rgba(46,255,168,.07);
+  letter-spacing:.5px;text-transform:uppercase;
+}
+.topbar-right{display:flex;align-items:center;gap:10px;margin-left:auto}
+.topbar-link{
+  font-size:12px;color:var(--text2);text-decoration:none;
+  padding:5px 12px;border-radius:6px;border:1px solid var(--border2);
+  transition:all .15s;
+}
+.topbar-link:hover{color:var(--neon);border-color:rgba(46,255,168,.3)}
+.search-box{
+  display:flex;align-items:center;gap:8px;
+  background:var(--bg2);border:1px solid var(--border2);
+  border-radius:8px;padding:6px 12px;
+  transition:border-color .15s;
+}
+.search-box:focus-within{border-color:rgba(46,255,168,.4)}
+.search-box input{
+  background:transparent;border:none;outline:none;
+  color:var(--text);font-family:var(--mono);font-size:12px;width:200px;
+}
+.search-box input::placeholder{color:var(--muted)}
+
+/* ── HERO ── */
+.hero{
+  position:relative;padding:56px 24px 40px;
+  text-align:center;max-width:700px;margin:0 auto;
+}
+.hero-title{
+  font-size:clamp(28px,5vw,44px);font-weight:700;line-height:1.15;
+  letter-spacing:-1.5px;margin-bottom:14px;
+}
+.hero-title .g{
+  background:linear-gradient(135deg,var(--neon) 0%,var(--neon2) 50%,var(--neon3) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+.hero-sub{font-size:15px;color:var(--text2);line-height:1.7;margin-bottom:24px}
+
+/* ── STATS BAR ── */
+.stats-bar{
+  display:flex;align-items:stretch;justify-content:center;gap:0;
+  max-width:520px;margin:0 auto 0;
+  border:1px solid var(--border2);border-radius:12px;
+  overflow:hidden;background:var(--bg2);
+}
+.stat-item{
+  flex:1;padding:14px 18px;text-align:center;
+  border-right:1px solid var(--border);
+  position:relative;
+}
+.stat-item:last-child{border-right:none}
+.stat-num{
+  font-family:var(--mono);font-size:22px;font-weight:700;
+  color:var(--neon);display:block;line-height:1;margin-bottom:4px;
+}
+.stat-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+
+/* ── LAYOUT ── */
+.layout{display:flex;gap:0;max-width:1200px;margin:0 auto;padding:32px 24px}
+.sidebar{
+  width:200px;flex-shrink:0;position:sticky;top:72px;
+  align-self:flex-start;height:calc(100vh - 90px);overflow-y:auto;
+  padding-right:16px;
+}
+.sidebar::-webkit-scrollbar{width:3px}
+.sidebar::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+.sidebar-title{
+  font-family:var(--mono);font-size:9px;color:var(--muted);
+  text-transform:uppercase;letter-spacing:2px;
+  padding:0 8px 10px;border-bottom:1px solid var(--border);margin-bottom:10px;
+}
+.cat-btn{
+  display:flex;align-items:center;justify-content:space-between;
+  width:100%;padding:7px 10px;border-radius:7px;
+  background:transparent;border:none;cursor:pointer;
+  font-family:var(--head);font-size:12px;color:var(--text2);
+  transition:all .15s;text-align:left;
+}
+.cat-btn:hover{background:rgba(255,255,255,.04);color:var(--text)}
+.cat-btn.active{background:rgba(46,255,168,.07);color:var(--neon)}
+.cat-btn .cat-count{
+  font-family:var(--mono);font-size:9px;color:var(--muted);
+  background:var(--bg3);padding:1px 6px;border-radius:10px;
+}
+.cat-btn.active .cat-count{color:var(--neon);background:rgba(46,255,168,.12)}
+.main{flex:1;min-width:0}
+
+/* ── SECTION HEADING ── */
+.section-head{
+  display:flex;align-items:center;gap:10px;
+  margin-bottom:20px;padding-bottom:12px;
+  border-bottom:1px solid var(--border);
+}
+.section-head h2{font-size:15px;font-weight:600;color:var(--text)}
+.section-count{
+  font-family:var(--mono);font-size:10px;color:var(--muted);
+  background:var(--bg3);padding:2px 8px;border-radius:10px;
+}
+
+/* ── ENDPOINT CARDS ── */
+.cards{display:flex;flex-direction:column;gap:10px;margin-bottom:40px}
+.card{
+  background:var(--bg2);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;transition:border-color .2s;
+}
+.card:hover{border-color:var(--border2)}
+.card-header{
+  display:flex;align-items:center;gap:12px;
+  padding:14px 18px;cursor:pointer;user-select:none;
+}
+.card-header:hover .method-badge{filter:brightness(1.1)}
+.method-badge{
+  font-family:var(--mono);font-size:10px;font-weight:700;
+  padding:3px 10px;border-radius:5px;flex-shrink:0;
+  letter-spacing:.5px;
+}
+.method-GET{background:rgba(46,255,168,.12);color:var(--neon);border:1px solid rgba(46,255,168,.25)}
+.method-POST{background:rgba(0,194,255,.12);color:var(--neon2);border:1px solid rgba(0,194,255,.25)}
+.method-DELETE{background:rgba(255,69,96,.12);color:var(--danger);border:1px solid rgba(255,69,96,.25)}
+.card-path{
+  font-family:var(--mono);font-size:13px;color:var(--text);
+  flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.card-path .param{color:var(--neon3)}
+.card-desc{font-size:11px;color:var(--text2);flex-shrink:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card-arrow{
+  color:var(--muted);font-size:14px;flex-shrink:0;
+  transition:transform .2s;
+}
+.card.open .card-arrow{transform:rotate(180deg)}
+.card-body{
+  border-top:1px solid var(--border);
+  padding:18px;display:none;
+  flex-direction:column;gap:16px;
+}
+.card.open .card-body{display:flex}
+
+/* Card body sections */
+.cb-section-title{
+  font-family:var(--mono);font-size:9px;color:var(--muted);
+  text-transform:uppercase;letter-spacing:2px;margin-bottom:8px;
+}
+.params-table{width:100%;border-collapse:collapse}
+.params-table th{
+  font-family:var(--mono);font-size:9px;color:var(--muted);
+  text-transform:uppercase;letter-spacing:1px;
+  padding:0 10px 6px 0;text-align:left;
+}
+.params-table td{
+  font-size:12px;color:var(--text2);
+  padding:6px 10px 6px 0;
+  border-top:1px solid var(--border);vertical-align:top;
+}
+.params-table td:first-child{font-family:var(--mono);font-size:11px;color:var(--neon3)}
+.req-badge{
+  font-family:var(--mono);font-size:8px;padding:1px 5px;
+  border-radius:3px;background:rgba(255,184,77,.1);
+  border:1px solid rgba(255,184,77,.25);color:var(--warn);
+}
+.opt-badge{
+  font-family:var(--mono);font-size:8px;padding:1px 5px;
+  border-radius:3px;background:rgba(255,255,255,.04);
+  border:1px solid var(--border2);color:var(--muted);
+}
+
+/* Try panel */
+.try-form{
+  background:var(--bg3);border:1px solid var(--border2);
+  border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px;
+}
+.try-row{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.try-field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:140px}
+.try-field label{font-family:var(--mono);font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+.try-field input{
+  background:var(--bg2);border:1px solid var(--border2);
+  border-radius:7px;padding:7px 10px;
+  color:var(--text);font-family:var(--mono);font-size:12px;
+  outline:none;transition:border-color .15s;
+}
+.try-field input:focus{border-color:rgba(46,255,168,.4)}
+.try-btn{
+  background:var(--neon);color:#000;border:none;
+  padding:8px 18px;border-radius:7px;cursor:pointer;
+  font-family:var(--mono);font-size:12px;font-weight:700;
+  transition:all .15s;white-space:nowrap;flex-shrink:0;
+}
+.try-btn:hover{background:#1de896;transform:translateY(-1px)}
+.try-btn:active{transform:translateY(0)}
+.try-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.try-result{
+  background:rgba(0,0,0,.4);border:1px solid var(--border2);
+  border-radius:8px;max-height:320px;overflow:auto;
+  padding:14px;
+}
+.try-result pre{font-family:var(--mono);font-size:11px;line-height:1.6;color:var(--text2);white-space:pre-wrap;word-break:break-all}
+.try-meta{display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.status-ok{color:var(--neon);font-family:var(--mono);font-size:10px}
+.status-err{color:var(--danger);font-family:var(--mono);font-size:10px}
+.res-time{font-family:var(--mono);font-size:10px;color:var(--muted)}
+.copy-btn{
+  margin-left:auto;background:transparent;border:1px solid var(--border2);
+  color:var(--muted);padding:3px 9px;border-radius:5px;cursor:pointer;
+  font-family:var(--mono);font-size:9px;transition:all .15s;
+}
+.copy-btn:hover{color:var(--neon);border-color:rgba(46,255,168,.3)}
+
+/* URL bar */
+.url-bar{
+  display:flex;align-items:center;gap:8px;
+  background:rgba(0,0,0,.3);border:1px solid var(--border);
+  border-radius:8px;padding:8px 12px;margin-bottom:4px;
+}
+.url-method{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--neon)}
+.url-text{font-family:var(--mono);font-size:11px;color:var(--text2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Empty state */
+.empty{
+  text-align:center;padding:80px 20px;
+  display:flex;flex-direction:column;align-items:center;gap:16px;
+}
+.empty-icon{
+  width:64px;height:64px;border-radius:16px;
+  background:var(--bg2);border:1px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;
+  font-size:28px;
+}
+.empty-title{font-size:18px;font-weight:600;color:var(--text)}
+.empty-sub{font-size:13px;color:var(--text2);max-width:380px;line-height:1.7}
+.empty-link{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--neon);color:#000;padding:10px 22px;
+  border-radius:8px;font-weight:700;font-size:13px;text-decoration:none;
+  transition:all .15s;
+}
+.empty-link:hover{background:#1de896;transform:translateY(-1px)}
+
+/* Footer */
+.footer{
+  text-align:center;padding:24px;
+  font-family:var(--mono);font-size:11px;color:var(--muted);
+  border-top:1px solid var(--border);margin-top:40px;
+}
+.footer a{color:var(--neon);text-decoration:none}
+.footer a:hover{text-decoration:underline}
+
+/* Scrollbar global */
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+
+/* Mobile */
+@media(max-width:700px){
+  .layout{flex-direction:column;padding:16px}
+  .sidebar{width:100%;position:static;height:auto;padding:0;overflow-x:auto}
+  .sidebar-cats{display:flex;flex-direction:row;gap:6px;overflow-x:auto;padding-bottom:10px}
+  .cat-btn{white-space:nowrap}
+  .hero{padding:32px 16px 24px}
+  .card-desc{display:none}
+  .try-row{flex-direction:column}
+  .search-box input{width:130px}
+}
+.spinner{
+  width:16px;height:16px;border:2px solid rgba(46,255,168,.2);
+  border-top-color:var(--neon);border-radius:50%;
+  animation:spin .7s linear infinite;display:inline-block;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<nav class="topbar">
+  <a class="logo" href="/">SmartScrape<span>AI</span></a>
+  <span class="topbar-badge">REST API</span>
+  <div class="search-box">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="color:var(--muted);flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input type="text" id="searchInput" placeholder="Cari endpoint..." oninput="filterEndpoints(this.value)">
+  </div>
+  <div class="topbar-right">
+    <a class="topbar-link" href="/admin">Admin</a>
+    <a class="topbar-link" href="/api/docs">API Docs</a>
+    <a class="topbar-link" href="/health">Health</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <h1 class="hero-title">Free <span class="g">REST API</span><br>Open &amp; Ready</h1>
+  <p class="hero-sub">Semua endpoint di-generate otomatis oleh AI dari website target.<br>Akses langsung, tidak perlu key, gratis.</p>
+  <div class="stats-bar">
+    <div class="stat-item">
+      <span class="stat-num" id="statEndpoints">${stats.total}</span>
+      <span class="stat-label">Endpoints</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-num" id="statScrapers">${stats.scrapers}</span>
+      <span class="stat-label">Scrapers</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-num">${stats.categories}</span>
+      <span class="stat-label">Kategori</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-num" id="uptime">${stats.uptime}s</span>
+      <span class="stat-label">Uptime</span>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN LAYOUT -->
+<div class="layout">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-title">Kategori</div>
+    <div class="sidebar-cats" id="catList">
+      <button class="cat-btn active" data-cat="all" onclick="filterCat('all',this)">
+        Semua <span class="cat-count" id="countAll">${routes.length}</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="main" id="mainContent">
+    <!-- Rendered by JS -->
+  </main>
+</div>
+
+<!-- FOOTER -->
+<footer class="footer">
+  Powered by <a href="/admin">SmartScrapeAI</a> &mdash; Generated endpoints tersedia 24/7 &mdash;
+  <span id="serverTime"></span>
+</footer>
+
+<script>
+const ROUTES = ${routesJson};
+const CATEGORIES = ${categoriesJson};
+const BASE = window.location.origin;
+
+let activeCategory = 'all';
+let searchQuery    = '';
+
+// ── Build sidebar categories ──
+function buildSidebar() {
+  const catList = document.getElementById('catList');
+  const counts  = {};
+  ROUTES.forEach(r => { counts[r.category] = (counts[r.category]||0)+1; });
+  CATEGORIES.forEach(cat => {
+    const btn = document.createElement('button');
+    btn.className = 'cat-btn';
+    btn.dataset.cat = cat;
+    btn.onclick = () => filterCat(cat, btn);
+    btn.innerHTML = cat + ' <span class="cat-count">' + (counts[cat]||0) + '</span>';
+    catList.appendChild(btn);
   });
 }
+
+// ── Filter by category ──
+function filterCat(cat, btn) {
+  activeCategory = cat;
+  document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderEndpoints();
+}
+
+// ── Filter by search ──
+function filterEndpoints(q) {
+  searchQuery = q.toLowerCase();
+  renderEndpoints();
+}
+
+// ── Format path with param highlighting ──
+function formatPath(path) {
+  return path.replace(/:([a-zA-Z_]+)/g, '<span class="param">:$1</span>')
+             .replace(/\?([^=]+)=/g, '?<span class="param">$1</span>=');
+}
+
+// ── Render all endpoints ──
+function renderEndpoints() {
+  const main = document.getElementById('mainContent');
+  let filtered = ROUTES.filter(r => {
+    const catOk = activeCategory === 'all' || r.category === activeCategory;
+    const searchOk = !searchQuery ||
+      r.path.toLowerCase().includes(searchQuery) ||
+      r.description.toLowerCase().includes(searchQuery) ||
+      r.category.toLowerCase().includes(searchQuery) ||
+      r.scraper.toLowerCase().includes(searchQuery);
+    return catOk && searchOk;
+  });
+
+  if (filtered.length === 0) {
+    main.innerHTML = ROUTES.length === 0
+      ? \`<div class="empty">
+          <div class="empty-icon">🔌</div>
+          <div class="empty-title">Belum ada API endpoint</div>
+          <div class="empty-sub">Buat scraper di Admin Panel, lalu generate API route dari scraper tersebut.</div>
+          <a class="empty-link" href="/admin">Buka Admin Panel</a>
+        </div>\`
+      : \`<div class="empty">
+          <div class="empty-icon">🔍</div>
+          <div class="empty-title">Tidak ditemukan</div>
+          <div class="empty-sub">Tidak ada endpoint yang cocok dengan pencarian "<b>\${searchQuery}</b>"</div>
+        </div>\`;
+    return;
+  }
+
+  // Group by category
+  const bycat = {};
+  filtered.forEach(r => {
+    if (!bycat[r.category]) bycat[r.category] = [];
+    bycat[r.category].push(r);
+  });
+
+  let html = '';
+  Object.entries(bycat).forEach(([cat, catRoutes]) => {
+    html += \`<div class="section-head">
+      <h2>\${cat.charAt(0).toUpperCase()+cat.slice(1)}</h2>
+      <span class="section-count">\${catRoutes.length} endpoint</span>
+    </div>
+    <div class="cards">\`;
+    catRoutes.forEach((r, idx) => {
+      const cid  = 'card_' + cat + '_' + idx;
+      html += buildCard(r, cid);
+    });
+    html += '</div>';
+  });
+  main.innerHTML = html;
+}
+
+// ── Build single endpoint card ──
+function buildCard(r, cid) {
+  const hasParams = r.params && r.params.length > 0;
+  let paramsHtml = '';
+  let tryInputs  = '';
+
+  if (hasParams) {
+    paramsHtml += \`<div>
+      <div class="cb-section-title">Parameters</div>
+      <table class="params-table">
+        <thead><tr>
+          <th>Nama</th><th>Tipe</th><th>Keterangan</th><th>Wajib</th>
+        </tr></thead>
+        <tbody>\`;
+    r.params.forEach(p => {
+      paramsHtml += \`<tr>
+        <td>\${p.name}</td>
+        <td><span style="color:var(--neon3);font-family:var(--mono);font-size:10px">\${p.type||'string'}</span></td>
+        <td>\${p.description||'-'}</td>
+        <td>\${p.required ? '<span class="req-badge">required</span>' : '<span class="opt-badge">optional</span>'}</td>
+      </tr>\`;
+    });
+    paramsHtml += '</tbody></table></div>';
+
+    // Build try inputs per param
+    r.params.forEach(p => {
+      tryInputs += \`<div class="try-field">
+        <label>\${p.name}\${p.required?'*':''}</label>
+        <input type="\${p.type==='url'?'url':'text'}" id="inp_\${cid}_\${p.name}"
+          placeholder="\${p.description||p.name}" />
+      </div>\`;
+    });
+  } else {
+    // Auto-detect mode/query/url dari path
+    const urlParams = [...r.path.matchAll(/[?&]([^=]+)=/g)].map(m => m[1]);
+    urlParams.forEach(p => {
+      tryInputs += \`<div class="try-field">
+        <label>\${p}</label>
+        <input type="text" id="inp_\${cid}_\${p}" placeholder="\${p}" />
+      </div>\`;
+    });
+    if (tryInputs === '') {
+      tryInputs = \`<div class="try-field" style="flex:1">
+        <label>URL lengkap (opsional override)</label>
+        <input type="text" id="inp_\${cid}_custom" placeholder="\${BASE}\${r.path}" />
+      </div>\`;
+    }
+  }
+
+  return \`<div class="card" id="\${cid}">
+    <div class="card-header" onclick="toggleCard('\${cid}')">
+      <span class="method-badge method-\${r.method}">\${r.method}</span>
+      <span class="card-path">\${formatPath(r.path)}</span>
+      <span class="card-desc">\${r.description.substring(0,50)}</span>
+      <span class="card-arrow">&#8964;</span>
+    </div>
+    <div class="card-body">
+      <div>
+        <div class="cb-section-title">Deskripsi</div>
+        <p style="font-size:13px;color:var(--text2);line-height:1.6">\${r.description}</p>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">Scraper:</span>
+          <a href="\${r.scraper_url}" target="_blank" style="font-family:var(--mono);font-size:10px;color:var(--neon2);text-decoration:none">\${r.scraper_url}</a>
+        </div>
+      </div>
+      \${paramsHtml}
+      <div>
+        <div class="cb-section-title">Try It</div>
+        <div class="try-form">
+          <div class="url-bar">
+            <span class="url-method">\${r.method}</span>
+            <span class="url-text" id="urlPreview_\${cid}">\${BASE}\${r.path}</span>
+          </div>
+          <div class="try-row">\${tryInputs}
+            <button class="try-btn" id="btn_\${cid}" onclick="tryEndpoint('\${cid}','\${r.method}','\${r.path}',\${JSON.stringify(r.params||[])})">
+              Run
+            </button>
+          </div>
+        </div>
+        <div id="result_\${cid}" style="display:none">
+          <div class="try-result">
+            <div class="try-meta">
+              <span id="status_\${cid}"></span>
+              <span id="time_\${cid}" class="res-time"></span>
+              <button class="copy-btn" onclick="copyResult('\${cid}')">Copy</button>
+            </div>
+            <pre id="pre_\${cid}"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>\`;
+}
+
+// ── Toggle card open/close ──
+function toggleCard(cid) {
+  const card = document.getElementById(cid);
+  card.classList.toggle('open');
+}
+
+// ── Try endpoint ──
+async function tryEndpoint(cid, method, path, params) {
+  const btn = document.getElementById('btn_' + cid);
+  const resultDiv = document.getElementById('result_' + cid);
+  const pre       = document.getElementById('pre_' + cid);
+  const statusEl  = document.getElementById('status_' + cid);
+  const timeEl    = document.getElementById('time_' + cid);
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  resultDiv.style.display = 'none';
+
+  // Build query string from inputs
+  const qs = new URLSearchParams();
+  if (params && params.length > 0) {
+    params.forEach(p => {
+      const val = document.getElementById('inp_' + cid + '_' + p.name)?.value?.trim();
+      if (val) qs.set(p.name, val);
+    });
+  } else {
+    // Auto-detect inputs
+    const customInput = document.getElementById('inp_' + cid + '_custom');
+    if (customInput?.value?.trim()) {
+      // Use custom URL as override
+      const customUrl = customInput.value.trim();
+      // Extract params from URL
+      try {
+        const u = new URL(customUrl.startsWith('http') ? customUrl : BASE + customUrl);
+        u.searchParams.forEach((v, k) => qs.set(k, v));
+      } catch {}
+    } else {
+      // Check for ?param= style inputs
+      const paramMatches = [...path.matchAll(/[?&]([^=]+)=/g)].map(m => m[1]);
+      paramMatches.forEach(p => {
+        const val = document.getElementById('inp_' + cid + '_' + p)?.value?.trim();
+        if (val) qs.set(p, val);
+      });
+    }
+  }
+
+  const callUrl = BASE + path + (qs.toString() ? (path.includes('?') ? '&' : '?') + qs.toString() : '');
+  document.getElementById('urlPreview_' + cid).textContent = callUrl;
+
+  const t0 = Date.now();
+  try {
+    const resp = await fetch(callUrl, { method });
+    const ms   = Date.now() - t0;
+    const data = await resp.json();
+    const json = JSON.stringify(data, null, 2);
+
+    // Syntax highlight
+    pre.innerHTML = syntaxHighlight(json);
+    statusEl.innerHTML = \`<span class="status-ok">HTTP \${resp.status} OK</span>\`;
+    timeEl.textContent = ms + 'ms';
+    resultDiv.style.display = 'block';
+  } catch (e) {
+    const ms = Date.now() - t0;
+    pre.textContent = 'Error: ' + e.message;
+    statusEl.innerHTML = '<span class="status-err">Error</span>';
+    timeEl.textContent = ms + 'ms';
+    resultDiv.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run';
+  }
+}
+
+// ── Copy result ──
+async function copyResult(cid) {
+  const text = document.getElementById('pre_' + cid)?.textContent || '';
+  await navigator.clipboard.writeText(text).catch(() => {});
+  const btn = event.target;
+  btn.textContent = 'Copied!';
+  btn.style.color = 'var(--neon)';
+  setTimeout(() => { btn.textContent = 'Copy'; btn.style.color = ''; }, 1500);
+}
+
+// ── JSON syntax highlight ──
+function syntaxHighlight(json) {
+  return json
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(?:\\s*:)?|\\b(true|false|null)\\b|-?\\d+(?:\\.\\d*)?(?:[eE][+\\-]?\\d+)?)/g, function(m){
+      let cls = 'color:var(--neon3)';
+      if (/^"/.test(m)) {
+        cls = /:$/.test(m) ? 'color:var(--neon2)' : 'color:var(--neon)';
+      } else if (/true|false/.test(m)) {
+        cls = 'color:var(--warn)';
+      } else if (/null/.test(m)) {
+        cls = 'color:var(--muted)';
+      } else {
+        cls = 'color:var(--neon3)';
+      }
+      return '<span style="' + cls + '">' + m + '</span>';
+    });
+}
+
+// ── Uptime counter ──
+let uptimeBase = ${stats.uptime};
+setInterval(() => {
+  uptimeBase++;
+  const el = document.getElementById('uptime');
+  if (el) el.textContent = uptimeBase < 3600
+    ? Math.floor(uptimeBase/60) + 'm ' + (uptimeBase%60) + 's'
+    : Math.floor(uptimeBase/3600) + 'h ' + Math.floor((uptimeBase%3600)/60) + 'm';
+}, 1000);
+
+// ── Server time ──
+function updateTime() {
+  const el = document.getElementById('serverTime');
+  if (el) el.textContent = new Date().toLocaleString('id-ID', {dateStyle:'medium',timeStyle:'short'});
+}
+updateTime();
+setInterval(updateTime, 30000);
+
+// ── Init ──
+buildSidebar();
+renderEndpoints();
+</script>
+</body>
+</html>`;
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.send(html);
+});
+
+
+
+// ══════════════════════════════════════════════════════════════
+//  GET /api/proxy/stream — Real-time streaming proxy
+//  Fetch URL target tanpa CORS block, stream bytes langsung ke client
+//  Dipakai oleh Visual Picker dan scraper preview
+//  Query: url=<target_url>
+// ══════════════════════════════════════════════════════════════
+app.get("/api/proxy/stream", async (req, res) => {
+  const { url: targetUrl } = req.query;
+  if (!targetUrl) return res.status(400).json({ error: "url diperlukan" });
+
+  let parsed;
+  try { parsed = new URL(targetUrl); } catch { return res.status(400).json({ error: "URL tidak valid" }); }
+
+  const proxyHeaders = {
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer":         "https://www.google.com/",
+    "DNT":             "1",
+    "Connection":      "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest":  "document",
+    "Sec-Fetch-Mode":  "navigate",
+    "Sec-Fetch-Site":  "cross-site",
+  };
+
+  try {
+    const upstream = await axios.get(targetUrl, {
+      headers:          proxyHeaders,
+      responseType:     "stream",
+      timeout:          30000,
+      maxRedirects:     10,
+      validateStatus:   () => true,
+      decompress:       true,
+    });
+
+    // Forward status
+    res.status(upstream.status);
+
+    // Forward content-type (agar browser tahu tipe konten)
+    const ct = upstream.headers["content-type"] || "text/html; charset=utf-8";
+    res.setHeader("Content-Type", ct);
+
+    // CORS headers agar bisa diakses dari frontend
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("X-Proxy-Source", parsed.hostname);
+    res.setHeader("X-Proxy-Layer",  "direct");
+
+    // Remove headers yang bisa bikin masalah
+    ["x-frame-options", "content-security-policy", "x-content-type-options",
+     "strict-transport-security", "x-xss-protection"].forEach(h => res.removeHeader(h));
+
+    // Jika HTML — inject base tag + rewrite link agar resource load
+    if (ct.includes("text/html")) {
+      let chunks = [];
+      upstream.data.on("data", c => chunks.push(c));
+      upstream.data.on("end", () => {
+        let html = Buffer.concat(chunks).toString("utf8");
+        const base = `${parsed.protocol}//${parsed.hostname}`;
+
+        // Inject base tag
+        if (!html.includes("<base")) {
+          html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${targetUrl}">`);
+        }
+
+        // Tambahkan CSP override script agar iframe works
+        const CSP_RESET = `<script>
+(function(){
+  // Override document.domain untuk allow cross-origin messaging
+  try { document.domain = document.domain; } catch(e) {}
+})();
+</script>`;
+        html = html.replace("</head>", CSP_RESET + "</head>");
+
+        res.end(html);
+      });
+      upstream.data.on("error", err => {
+        if (!res.headersSent) res.status(502).json({ error: err.message });
+        else res.end();
+      });
+    } else {
+      // Non-HTML (CSS, JS, img) — pipe langsung
+      upstream.data.pipe(res);
+      upstream.data.on("error", () => res.end());
+    }
+  } catch (e) {
+    if (!res.headersSent) res.status(502).json({ error: e.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+//  Frontend: /admin route (serve React SPA)
+// ══════════════════════════════════════════════════════════════
+if (IS_PROD) {
+  const clientDist = path.join(__dirname, "client", "dist");
+  const idxPath    = path.join(clientDist, "index.html");
+
+  // /admin dan semua sub-route → index.html
+  app.get(["/admin", "/admin/*"], (req, res) => {
+    if (fs.existsSync(idxPath)) res.sendFile(idxPath);
+    else res.status(404).json({ error: "Frontend tidak ditemukan. Build dulu: npm run build" });
+  });
+}
+
 
 // ── Start ─────────────────────────────────────────────────────
 app.listen(PORT, "0.0.0.0", () => {

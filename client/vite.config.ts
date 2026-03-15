@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  // Base path /admin — semua asset akan di-serve dari /admin/
+  base: "/admin/",
   server: {
     port: 5173,
     proxy: {

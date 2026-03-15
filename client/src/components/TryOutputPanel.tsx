@@ -122,7 +122,13 @@ export function TryOutputPanel({ scraper, compact = false }: Props) {
   };
 
   const schema = scraper.trySchema || [];
-  const hasDefaultUrl = schema.some(f => f.type === "url");
+  const modeField = schema.find(f => f.name === "mode");
+  const defaultMode = modeField?.placeholder?.split(" | ")?.[0]?.trim() || "list";
+
+  // Pre-fill mode when schema loads
+  if (modeField && !inputs["mode"]) {
+    setTimeout(() => setInputs(p => ({ ...p, mode: defaultMode })), 0);
+  }
 
   return (
     <div className="try-panel">
@@ -136,24 +142,59 @@ export function TryOutputPanel({ scraper, compact = false }: Props) {
 
       {expanded && (
         <div className="try-panel-body">
-          {/* Input fields */}
+          {/* Smart input fields */}
           {schema.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
-              {schema.map(field => (
-                <div key={field.name}>
-                  <label style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 4 }}>
-                    {field.label}{field.required && <span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span>}
-                  </label>
-                  <input
-                    className="field-input"
-                    style={{ fontSize: 12 }}
-                    type={field.type === "url" ? "url" : "text"}
-                    placeholder={field.placeholder}
-                    value={inputs[field.name] || ""}
-                    onChange={e => setInputs(p => ({ ...p, [field.name]: e.target.value }))}
-                  />
-                </div>
-              ))}
+              {schema.map(field => {
+                // Mode field → render sebagai select dropdown
+                if (field.name === "mode" && field.placeholder?.includes("|")) {
+                  const modes = field.placeholder.split("|").map(m => m.trim()).filter(Boolean);
+                  const curMode = inputs["mode"] || defaultMode;
+                  return (
+                    <div key={field.name}>
+                      <label style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 4 }}>
+                        {field.label}<span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span>
+                      </label>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {modes.map(m => (
+                          <button key={m} onClick={() => setInputs(p => ({ ...p, mode: m }))}
+                            style={{
+                              fontFamily: "var(--mono)", fontSize: 11, padding: "4px 12px",
+                              borderRadius: 6, cursor: "pointer",
+                              background: curMode === m ? "rgba(46,255,168,.18)" : "rgba(0,0,0,.3)",
+                              border: `1px solid ${curMode === m ? "rgba(46,255,168,.5)" : "var(--border2)"}`,
+                              color: curMode === m ? "var(--neon)" : "var(--text2)",
+                              transition: "all .15s",
+                            }}>
+                            {m}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // Skip fields not relevant to current mode
+                const curMode = inputs["mode"] || defaultMode;
+                if (field.name === "query" && curMode === "detail") return null;
+                if ((field.name === "url" || field.name.endsWith("url") || field.name.endsWith("Url")) && curMode === "list") return null;
+
+                return (
+                  <div key={field.name}>
+                    <label style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1, display: "block", marginBottom: 4 }}>
+                      {field.label}{field.required && <span style={{ color: "var(--danger)", marginLeft: 3 }}>*</span>}
+                    </label>
+                    <input
+                      className="field-input"
+                      style={{ fontSize: 12 }}
+                      type={field.type === "url" ? "url" : field.type === "number" ? "number" : "text"}
+                      placeholder={field.placeholder}
+                      value={inputs[field.name] || ""}
+                      onChange={e => setInputs(p => ({ ...p, [field.name]: e.target.value }))}
+                    />
+                  </div>
+                );
+              })}
             </div>
           )}
 

@@ -60,17 +60,72 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
   useEffect(() => {
     if (!url) return;
     setLoading(true); setError(""); setReady(false); setPicked([]);
-    previewHtml(url)
-      .then(res => {
-        if (!res.success || !res.html) { setError("Gagal load HTML"); return; }
-        setLayer(res.layer);
-        // Inject processed HTML into iframe via srcdoc
-        if (iframeRef.current) {
-          iframeRef.current.srcdoc = res.html;
+
+    // Mode 1: Coba load via proxy stream (real-time, tanpa putus)
+    // iframe src → /api/proxy/stream?url=... (server pipe bytes langsung)
+    const proxyUrl = `/api/proxy/stream?url=${encodeURIComponent(url)}`;
+
+    if (iframeRef.current) {
+      const iframe = iframeRef.current;
+
+      // Timeout: jika 20 detik belum ready, fallback ke previewHtml
+      const timeout = setTimeout(async () => {
+        if (!ready) {
+          console.log("[VisualPicker] Proxy timeout, fallback ke previewHtml...");
+          try {
+            const res = await previewHtml(url);
+            if (res.success && res.html && iframe) {
+              setLayer(res.layer);
+              iframe.srcdoc = res.html;
+            } else {
+              setError("Gagal load halaman. Coba Scan Elemen biasa.");
+            }
+          } catch (e: any) {
+            setError(e.message || "Gagal fetch HTML");
+          } finally {
+            setLoading(false);
+          }
         }
-      })
-      .catch(e => setError(e.message || "Gagal fetch HTML"))
-      .finally(() => setLoading(false));
+      }, 20000);
+
+      const handleLoad = () => {
+        setLoading(false);
+        clearTimeout(timeout);
+        // Inject picker script setelah iframe load via proxy
+        try {
+          // Kirim pesan ke iframe untuk inject picker jika belum ada
+          iframe.contentWindow?.postMessage({ type: "__sai_inject" }, "*");
+        } catch {}
+      };
+
+      const handleError = async () => {
+        clearTimeout(timeout);
+        // Fallback ke previewHtml (srcdoc)
+        try {
+          const res = await previewHtml(url);
+          if (res.success && res.html) {
+            setLayer(res.layer);
+            iframe.srcdoc = res.html;
+          } else {
+            setError("Gagal load halaman.");
+          }
+        } catch (e: any) {
+          setError(e.message || "Gagal");
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      iframe.addEventListener("load", handleLoad, { once: true });
+      iframe.addEventListener("error", handleError, { once: true });
+      iframe.src = proxyUrl;
+
+      return () => {
+        clearTimeout(timeout);
+        iframe.removeEventListener("load", handleLoad);
+        iframe.removeEventListener("error", handleError);
+      };
+    }
   }, [url]);
 
   const handleApply = () => {
@@ -166,7 +221,8 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
           )}
           <iframe
             ref={iframeRef}
-            sandbox="allow-scripts allow-same-origin"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            referrerPolicy="no-referrer"
             style={{
               width: "100%", height: "100%", border: "none",
               display: loading || error ? "none" : "block",
