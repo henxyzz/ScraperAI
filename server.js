@@ -1835,110 +1835,402 @@ app.post("/api/preview-html", async (req, res) => {
   // Inject visual picker
   const PICKER = `
 <style>
-.__sai_hover{outline:2px solid #00c2ff!important;outline-offset:1px!important;cursor:crosshair!important;background-color:rgba(0,194,255,.08)!important}
-.__sai_selected{outline:3px solid #2effa8!important;background-color:rgba(46,255,168,.12)!important}
-#__sai_badge{position:fixed;top:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.92);color:#2effa8;border:1px solid #2effa8;padding:6px 14px;border-radius:8px;font:11px/1.5 monospace;z-index:2147483647;pointer-events:none;white-space:nowrap;display:none}
-#__sai_bar{position:fixed;bottom:0;left:0;right:0;z-index:2147483647;background:rgba(0,0,0,.95);border-top:1px solid #2effa8;padding:8px 14px;display:flex;align-items:center;gap:10px;font:11px monospace;color:#aaa}
-#__sai_bar button{background:#2effa8;color:#000;border:none;padding:4px 12px;border-radius:5px;cursor:pointer;font:700 11px monospace}
-#__sai_bar .d{background:#ff4560;color:#fff}
+.__sai_hover{outline:2px solid #00c2ff!important;outline-offset:1px!important;cursor:crosshair!important;background-color:rgba(0,194,255,.07)!important}
+.__sai_selected{outline:3px solid #2effa8!important;background-color:rgba(46,255,168,.1)!important}
+#__sai_badge{
+  position:fixed;top:8px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.93);color:#2effa8;border:1px solid rgba(46,255,168,.5);
+  padding:5px 14px;border-radius:7px;font:11px/1.5 monospace;
+  z-index:2147483647;pointer-events:none;white-space:nowrap;display:none;
+  max-width:90vw;overflow:hidden;text-overflow:ellipsis;
+}
+#__sai_bar{
+  position:fixed;bottom:0;left:0;right:0;z-index:2147483647;
+  background:rgba(8,12,18,.97);border-top:1px solid rgba(46,255,168,.4);
+  padding:7px 16px;display:flex;align-items:center;gap:10px;
+  font:11px monospace;color:#888;user-select:none;
+  /* toolbar tidak intercept hover/click dari picker */
+  pointer-events:all;
+}
+#__sai_bar button{
+  background:#2effa8;color:#000;border:none;padding:4px 13px;
+  border-radius:5px;cursor:pointer;font:700 11px monospace;
+  pointer-events:all;
+}
+#__sai_bar .d{background:#ff4560;color:#fff;}
+#__sai_bar .cnt{color:#2effa8;font-weight:700;margin:0 2px;}
 </style>
 <div id="__sai_badge"></div>
-<div id="__sai_bar">
-  <span>🎯 Visual Picker</span>
-  <span>Dipilih: <b id="__sai_cnt">0</b></span>
-  <button onclick="__done()">✅ Selesai</button>
-  <button class="d" onclick="__clear()">🗑 Clear</button>
+<div id="__sai_bar" data-sai-toolbar="1">
+  <span>Visual Picker</span>
+  <span>Dipilih: <span id="__sai_cnt" class="cnt">0</span> elemen</span>
+  <button data-sai-btn="done" onclick="window.__sai_done()">Selesai</button>
+  <button data-sai-btn="clear" class="d" onclick="window.__sai_clear()">Clear</button>
 </div>
 <script>
 (function(){
 'use strict';
-var sel=[], hov=null;
-var IGN=['html','body','head','script','style','noscript','#document'];
-function bSel(el){
-  if(!el||el.nodeType!==1)return null;
-  var t=el.tagName.toLowerCase();
-  if(IGN.includes(t))return null;
-  if(el.id&&!/^[0-9]/.test(el.id))return '#'+el.id;
-  var ip=el.getAttribute('itemprop');
-  if(ip)return t+'[itemprop="'+ip+'"]';
-  var cls=Array.from(el.classList||[]).filter(function(c){return c.length>1&&c.length<40&&!/^[0-9]/.test(c)});
-  if(cls.length)return t+'.'+cls.slice(0,2).join('.');
-  var it=el.getAttribute('itemtype');
-  if(it)return t+'[itemscope]';
-  return t;
+
+var selected = [];
+var hovered  = null;
+var SKIP_TAGS = {html:1,body:1,head:1,script:1,style:1,noscript:1,meta:1,link:1};
+
+/* --- Guard: apakah elemen ini bagian dari toolbar SAI? --- */
+function isSAIEl(el) {
+  if (!el || el.nodeType !== 1) return true;
+  var cur = el;
+  while (cur) {
+    if (cur.id === '__sai_bar' || cur.id === '__sai_badge') return true;
+    if (cur.getAttribute && cur.getAttribute('data-sai-toolbar')) return true;
+    if (cur.getAttribute && cur.getAttribute('data-sai-btn')) return true;
+    cur = cur.parentElement;
+  }
+  return false;
 }
-function exF(el){
-  var f=[],seen={};
-  function add(n,v,s){if(!n||!v||seen[n])return;seen[n]=1;f.push({name:n,value:String(v).substring(0,200),source:s});}
-  var props=el.querySelectorAll('[itemprop]');
-  props.forEach(function(c){var p=c.getAttribute('itemprop');var v=c.textContent.trim()||c.getAttribute('src')||c.getAttribute('href')||c.getAttribute('content')||'';if(p&&v)add(p,v,'microdata');});
-  var h=el.querySelector('h1,h2,h3,h4,h5');if(h)add('title',h.textContent.trim(),'dom');
-  var a=el.querySelector('a[href]');if(a)add('link',a.href||a.getAttribute('href'),'dom');
-  var img=el.querySelector('img');
-  if(img){var src=img.src||img.getAttribute('data-src')||img.getAttribute('data-lazy')||img.getAttribute('data-original')||'';if(src&&src.indexOf('data:')<0)add('image',src,'dom');}
-  Array.from(el.attributes||[]).forEach(function(a){if(a.name.startsWith('data-')&&a.value&&a.value.length<200)add(a.name.replace('data-','').replace(/-/g,'_'),a.value,'data-attr');});
-  el.querySelectorAll('span,div,p,strong').forEach(function(sp){
-    var t=sp.textContent.trim();
-    if(!seen.rating&&/^\\d[.,]\\d$/.test(t))add('rating',t,'pattern');
-    if(!seen.year&&/^(19|20)\\d{2}$/.test(t))add('year',t,'pattern');
-    if(!seen.quality&&/^(HD|FHD|4K|720p|1080p|BLURAY|WEB-DL|WEBRIP)$/i.test(t))add('quality',t,'pattern');
-    if(!seen.price&&/^(Rp|\\$)?[\\d.,]+\\s*(rb|jt|k)?$/i.test(t))add('price',t,'pattern');
+
+/* --- Buat selector dasar untuk satu elemen --- */
+function baseSelector(el) {
+  if (!el || el.nodeType !== 1) return null;
+  var tag = el.tagName.toLowerCase();
+  if (SKIP_TAGS[tag]) return null;
+
+  // 1. id unik
+  if (el.id && !/^[0-9]/.test(el.id) && document.querySelectorAll('#'+el.id).length === 1)
+    return '#' + el.id;
+
+  // 2. itemprop (microdata — sangat spesifik)
+  var ip = el.getAttribute('itemprop');
+  if (ip) return tag + '[itemprop="' + ip + '"]';
+
+  // 3. class (ambil 2 class terpanjang, filter utility classes)
+  var cls = Array.from(el.classList || [])
+    .filter(function(c){ return c.length > 2 && c.length < 40 && !/^[0-9a-f]{5,}$/.test(c) && !/^(active|open|show|hide|is-|js-)/.test(c); })
+    .sort(function(a,b){ return b.length - a.length; });
+  if (cls.length) return tag + '.' + cls.slice(0,2).join('.');
+
+  // 4. itemscope container
+  if (el.getAttribute('itemtype')) return tag + '[itemscope]';
+
+  return tag;
+}
+
+/* --- Context-aware selector: include parent section jika selector terlalu generic ---
+   Misal: div.item di dalam section.hot-section → "section.hot-section div.item"
+   Ini yang membedakan Hot Videos vs Latest Videos
+*/
+function buildContextSelector(el) {
+  var childSel = baseSelector(el);
+  if (!childSel) return null;
+
+  // Hitung berapa banyak elemen dengan selector ini di seluruh dokumen
+  var totalCount = 0;
+  try { totalCount = document.querySelectorAll(childSel).length; } catch(e) { return childSel; }
+
+  // Jika <= 3, selector sudah spesifik cukup
+  if (totalCount <= 3) return childSel;
+
+  // Walk up parent untuk cari container yang membatasi scope
+  var parent = el.parentElement;
+  var depth = 0;
+  while (parent && depth < 8) {
+    var pTag = (parent.tagName || '').toLowerCase();
+    if (SKIP_TAGS[pTag] || pTag === 'main' || pTag === 'article') break;
+
+    var pSel = baseSelector(parent);
+    if (!pSel || pSel === pTag) { parent = parent.parentElement; depth++; continue; }
+
+    // Cek berapa banyak childSel di dalam parent ini
+    var scopedCount = 0;
+    try { scopedCount = parent.querySelectorAll(childSel).length; } catch(e) {}
+
+    // Jika parent membatasi scope dengan signifikan (< 50% dari total)
+    if (scopedCount > 0 && scopedCount < totalCount * 0.6) {
+      var combined = pSel + ' ' + childSel;
+      // Verifikasi combined selector valid
+      try {
+        var verifyCount = document.querySelectorAll(combined).length;
+        if (verifyCount > 0 && verifyCount <= scopedCount) {
+          return combined;
+        }
+      } catch(e) {}
+    }
+
+    parent = parent.parentElement;
+    depth++;
+  }
+
+  return childSel;
+}
+
+/* --- Extract field data dari elemen --- */
+function extractFields(el) {
+  var f = [], seen = {};
+  function add(n, v, s) {
+    if (!n || !v || seen[n]) return;
+    var vs = String(v).trim();
+    if (!vs || vs.length > 300) return;
+    seen[n] = 1;
+    f.push({ name: n, value: vs.substring(0, 200), source: s });
+  }
+
+  // itemprop (microdata — paling akurat)
+  var props = el.querySelectorAll('[itemprop]');
+  Array.from(props).forEach(function(c) {
+    var p = c.getAttribute('itemprop');
+    var v = c.textContent.trim() || c.getAttribute('src') || c.getAttribute('href') || c.getAttribute('content') || '';
+    if (p && v) add(p, v, 'microdata');
   });
-  if(!f.length){var tx=el.textContent.trim().substring(0,100);if(tx)add('text',tx,'dom');}
+
+  // heading = title
+  var h = el.querySelector('h1,h2,h3,h4,h5');
+  if (h && h.textContent.trim()) add('title', h.textContent.trim(), 'dom');
+
+  // link
+  var a = el.querySelector('a[href]');
+  if (a) add('link', a.href || a.getAttribute('href') || '', 'dom');
+
+  // image (coba semua lazy-load attributes)
+  var img = el.querySelector('img');
+  if (img) {
+    var src = img.getAttribute('data-src') || img.getAttribute('data-lazy') ||
+              img.getAttribute('data-original') || img.getAttribute('data-lazy-src') ||
+              img.getAttribute('data-thumbnail_url') || img.src || '';
+    if (src && src.indexOf('data:') < 0 && src.length > 4) add('image', src, 'dom');
+  }
+
+  // data-* attributes
+  Array.from(el.attributes || []).forEach(function(attr) {
+    if (!attr.name.startsWith('data-')) return;
+    var v = attr.value;
+    if (!v || v.length > 300) return;
+    var n = attr.name.replace('data-','').replace(/-/g,'_');
+    if (['id','v','key','index','aos','wow'].includes(n)) return;
+    add(n, v, 'data-attr');
+  });
+
+  // Scan text patterns: rating, year, quality, price
+  var spans = el.querySelectorAll('span,strong,em,small,div,p');
+  Array.from(spans).forEach(function(sp) {
+    var t = sp.textContent.trim();
+    if (!t || t.length > 100) return;
+    if (!seen.rating  && /^\\d[.,]\\d$/.test(t))                         add('rating',  t, 'pattern');
+    if (!seen.year    && /^(19|20)\\d{2}$/.test(t))                      add('year',    t, 'pattern');
+    if (!seen.quality && /^(HD|FHD|4K|720p|1080p|BLURAY|WEB-?DL|CAM|TS|WEBRIP)$/i.test(t)) add('quality', t, 'pattern');
+    if (!seen.episode && /^(ep|eps?|episode)\\s*\\d+/i.test(t))           add('episode', t, 'pattern');
+    if (!seen.price   && /^(Rp|\\$|USD)?\\s?[\\d.,]+\\s*(rb|jt|k|m)?$/i.test(t) && t.length < 20) add('price', t, 'pattern');
+  });
+
+  // Fallback: ambil teks pertama yang berarti
+  if (!seen.title && !seen.text) {
+    var tx = el.textContent.trim().replace(/\\s+/g,' ').substring(0,100);
+    if (tx) add('text', tx, 'dom');
+  }
+
   return f;
 }
-function getIT(el){var it=el.getAttribute&&el.getAttribute('itemtype');return it?it.split('/').pop():'';}
-function updBadge(el){
-  var b=document.getElementById('__sai_badge');if(!b)return;
-  var s=bSel(el)||el.tagName.toLowerCase();
-  var n=0;try{n=document.querySelectorAll(s).length;}catch(e){}
-  var it=getIT(el);
-  b.style.display='block';b.textContent=(it?'['+it+'] ':'')+s+' ('+n+'x)';
+
+function getItemType(el) {
+  var it = el.getAttribute && el.getAttribute('itemtype');
+  return it ? it.split('/').pop() : '';
 }
-function onOver(e){
-  var el=e.target;if(!el||IGN.includes((el.tagName||'').toLowerCase()))return;
-  if(hov&&hov!==el)hov.classList.remove('__sai_hover');
-  hov=el;el.classList.add('__sai_hover');updBadge(el);e.stopPropagation();
+
+function updateBadge(el) {
+  var badge = document.getElementById('__sai_badge');
+  if (!badge || !el) return;
+  var ctxSel = buildContextSelector(el);
+  if (!ctxSel) { badge.style.display = 'none'; return; }
+  var n = 0;
+  try { n = document.querySelectorAll(ctxSel).length; } catch(e) {}
+  var it = getItemType(el);
+  badge.style.display = 'block';
+  badge.textContent   = (it ? '[' + it + '] ' : '') + ctxSel + ' -- ' + n + ' item';
 }
-function onOut(e){
-  var el=e.target;if(el&&!el.classList.contains('__sai_selected'))el.classList.remove('__sai_hover');
-  var b=document.getElementById('__sai_badge');if(b)b.style.display='none';
+
+/* --- Event: mouseover --- */
+function onMouseOver(e) {
+  var el = e.target;
+  if (!el || SKIP_TAGS[(el.tagName||'').toLowerCase()]) return;
+  if (isSAIEl(el)) return;
+
+  if (hovered && hovered !== el) hovered.classList.remove('__sai_hover');
+  hovered = el;
+  el.classList.add('__sai_hover');
+  updateBadge(el);
+  e.stopPropagation();
 }
-function onClick(e){
-  e.preventDefault();e.stopPropagation();
-  var el=e.target;if(!el||IGN.includes((el.tagName||'').toLowerCase()))return;
-  var s=bSel(el);if(!s)return;
-  var fields=exF(el);
-  var cnt=0;try{cnt=document.querySelectorAll(s).length;}catch(ex){}
-  var it=getIT(el);
-  var idx=sel.findIndex(function(x){return x.selector===s;});
-  if(idx>=0){
-    sel.splice(idx,1);
-    document.querySelectorAll('.__sai_selected').forEach(function(x){
-      if(bSel(x)===s)x.classList.remove('__sai_selected','__sai_hover');
-    });
-  } else {
-    sel.push({id:'v_'+Date.now(),source:it?'microdata':'visual',category:it?it.toLowerCase():(el.tagName||'div').toLowerCase(),
-      label:(it?'['+it+'] ':'')+s+' ('+cnt+'x)',selector:s,itemType:it||null,
-      fields:fields,rawFields:fields.map(function(f){return f.name;}),
-      preview:fields.slice(0,4).map(function(f){return f.name+': '+f.value.substring(0,60);}),
-      count:cnt,target:s+' ('+cnt+'x): '+fields.map(function(f){return f.name;}).join(', '),priority:it?20:15});
-    try{document.querySelectorAll(s).forEach(function(x){x.classList.add('__sai_selected');});}catch(ex){}
+
+/* --- Event: mouseout --- */
+function onMouseOut(e) {
+  var el = e.target;
+  if (el && !el.classList.contains('__sai_selected')) el.classList.remove('__sai_hover');
+  var badge = document.getElementById('__sai_badge');
+  if (badge) badge.style.display = 'none';
+}
+
+/* --- Auto-detect pagination patterns di halaman --- */
+function detectPagination() {
+  var p = { found: false, type: null, selector: null, nextUrl: null, paramName: null, totalPages: null };
+
+  // 1. rel="next" link — paling reliable
+  var nextLink = document.querySelector('a[rel="next"]');
+  if (nextLink) {
+    p.found    = true;
+    p.type     = 'rel_next';
+    p.selector = 'a[rel="next"]';
+    p.nextUrl  = nextLink.href;
+    return p;
   }
-  document.getElementById('__sai_cnt').textContent=sel.length;
-  window.parent.postMessage({type:'__sai_selection',items:sel},'*');
+
+  // 2. URL pattern detection (page=2, /page/2, ?p=2, hal=2, etc)
+  var allLinks = Array.from(document.querySelectorAll('a[href]'));
+  var pagePatterns = [
+    { re: /[?&](page|p|hal|pg|paged|num)=(\d+)/i,  param: function(m){ return m[1]; } },
+    { re: /\/page\/(\d+)/i,                           param: function(){ return 'page_path'; } },
+    { re: /\/p\/(\d+)\/?$/i,                          param: function(){ return 'p_path'; } },
+  ];
+  var pageNums = [];
+  var bestLink = null;
+  allLinks.forEach(function(a) {
+    var href = a.href || '';
+    pagePatterns.forEach(function(pat) {
+      var m = href.match(pat.re);
+      if (m) {
+        var num = parseInt(m[m.length-1], 10);
+        if (num > 1) {
+          pageNums.push(num);
+          if (!bestLink || num > parseInt((bestLink.href.match(pat.re)||[0,0]).pop(), 10)) {
+            bestLink = a;
+            p.paramName = pat.param(m);
+          }
+        }
+      }
+    });
+  });
+
+  if (bestLink && pageNums.length > 0) {
+    p.found      = true;
+    p.type       = 'url_param';
+    p.selector   = 'a[href*="page"]';
+    p.nextUrl    = bestLink.href;
+    p.totalPages = Math.max.apply(null, pageNums);
+    return p;
+  }
+
+  // 3. "Load More" / "Next" button
+  var loadMoreSels = [
+    'button[class*="next"]', 'button[class*="load"]', 'button[class*="more"]',
+    'a[class*="next"]',      'a[class*="load"]',      'a[class*="more"]',
+    '.next a', '.pagination .next', '[aria-label="Next"]',
+  ];
+  for (var i = 0; i < loadMoreSels.length; i++) {
+    var btn = document.querySelector(loadMoreSels[i]);
+    if (btn) {
+      p.found    = true;
+      p.type     = 'button_next';
+      p.selector = loadMoreSels[i];
+      p.nextUrl  = btn.href || null;
+      return p;
+    }
+  }
+
+  // 4. Infinite scroll indicator
+  var infiniteSels = [
+    '[class*="infinite"]', '[data-infinite]', '[class*="load-more"]',
+    '[class*="autoload"]', '[id*="infinite"]',
+  ];
+  for (var j = 0; j < infiniteSels.length; j++) {
+    if (document.querySelector(infiniteSels[j])) {
+      p.found    = true;
+      p.type     = 'infinite_scroll';
+      p.selector = infiniteSels[j];
+      return p;
+    }
+  }
+
+  return p;
 }
-function __done(){window.parent.postMessage({type:'__sai_done',items:sel},'*');}
-function __clear(){
-  document.querySelectorAll('.__sai_selected,.__sai_hover').forEach(function(el){el.classList.remove('__sai_selected','__sai_hover');});
-  sel=[];document.getElementById('__sai_cnt').textContent='0';
-  window.parent.postMessage({type:'__sai_selection',items:[]},'*');
+
+/* --- Event: click --- */
+function onClick(e) {
+  // PENTING: skip jika ini toolbar SAI
+  if (isSAIEl(e.target)) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  var el = e.target;
+  if (!el || SKIP_TAGS[(el.tagName||'').toLowerCase()]) return;
+
+  var ctxSel = buildContextSelector(el);
+  if (!ctxSel) return;
+
+  var fields    = extractFields(el);
+  var it        = getItemType(el);
+  var allEls    = [];
+  try { allEls = Array.from(document.querySelectorAll(ctxSel)); } catch(x) {}
+  var cnt = allEls.length;
+
+  // Toggle selection
+  var existing = selected.findIndex(function(s){ return s.selector === ctxSel; });
+
+  if (existing >= 0) {
+    // Deselect
+    selected.splice(existing, 1);
+    allEls.forEach(function(x){ x.classList.remove('__sai_selected','__sai_hover'); });
+  } else {
+    // Auto-detect pagination setiap kali pilih elemen baru
+    var pag = detectPagination();
+
+    var item = {
+      id:         'v_' + Date.now(),
+      source:     it ? 'microdata' : 'visual',
+      category:   it ? it.toLowerCase() : (el.tagName||'div').toLowerCase(),
+      label:      (it ? '[' + it + '] ' : '') + ctxSel + ' (' + cnt + 'x)',
+      selector:   ctxSel,
+      itemType:   it || null,
+      fields:     fields,
+      rawFields:  fields.map(function(f){ return f.name; }),
+      preview:    fields.slice(0,5).map(function(f){ return f.name + ': ' + f.value.substring(0,60); }),
+      count:      cnt,
+      target:     ctxSel + ' (' + cnt + 'x): ' + fields.map(function(f){ return f.name; }).join(', '),
+      priority:   it ? 20 : 15,
+      pagination: pag,  // Auto-detected pagination info
+    };
+    selected.push(item);
+    allEls.forEach(function(x){ x.classList.add('__sai_selected'); });
+
+    // Update badge dengan pagination info
+    var badge = document.getElementById('__sai_badge');
+    if (badge && pag.found) {
+      badge.style.display = 'block';
+      badge.textContent   = ctxSel + ' + ' + (pag.type === 'infinite_scroll' ? 'infinite scroll' : pag.totalPages ? pag.totalPages + ' halaman' : 'pagination') + ' terdeteksi';
+    }
+  }
+
+  document.getElementById('__sai_cnt').textContent = selected.length;
+  window.parent.postMessage({ type: '__sai_selection', items: selected }, '*');
 }
-window.__done=__done;window.__clear=__clear;
-document.addEventListener('mouseover',onOver,true);
-document.addEventListener('mouseout',onOut,true);
-document.addEventListener('click',onClick,true);
-window.parent.postMessage({type:'__sai_ready'},'*');
+
+/* --- Toolbar actions --- */
+window.__sai_done = function() {
+  window.parent.postMessage({ type: '__sai_done', items: selected }, '*');
+};
+
+window.__sai_clear = function() {
+  document.querySelectorAll('.__sai_selected,.__sai_hover').forEach(function(el){
+    el.classList.remove('__sai_selected','__sai_hover');
+  });
+  selected = [];
+  document.getElementById('__sai_cnt').textContent = '0';
+  window.parent.postMessage({ type: '__sai_selection', items: [] }, '*');
+};
+
+/* --- Attach events dengan capture=false untuk mouseover/out, capture=true untuk click tapi dengan guard --- */
+document.addEventListener('mouseover', onMouseOver, false);
+document.addEventListener('mouseout',  onMouseOut,  false);
+document.addEventListener('click',     onClick,     true);
+
+window.parent.postMessage({ type: '__sai_ready' }, '*');
 })();
 </script>`;
 
@@ -2760,87 +3052,200 @@ ${RULES}`,
     const hostname  = (() => { try { return new URL(url).hostname.replace("www.",""); } catch { return "site"; } })();
     const routeName = hostname.replace(/\./g,"").replace(/[^a-z0-9]/gi,"").toLowerCase();
     const fieldList = foundFields.slice(0,8).map(f=>f.name).join(", ") || "title, link, image, rating";
-    const hasSearch = (target||"").toLowerCase().includes("cari") || (target||"").toLowerCase().includes("search") || (selectors||"").includes("search_form");
-    const modesStr  = hasSearch
-      ? `mode=list (semua item), mode=search&query=xxx (cari), mode=detail&url=xxx (detail)`
-      : `mode=list (semua item), mode=detail&url=xxx (detail item)`;
+
+    // Extract pagination info from selected elements (dari Visual Picker)
+    let paginationInfo = { found: false, type: null, selector: null, nextUrl: null, totalPages: null };
+    let paginationContext = "";
+    if (selectors) {
+      try {
+        const parsed = JSON.parse(selectors);
+        const withPag = parsed.find(p => p.pagination && p.pagination.found);
+        if (withPag) {
+          paginationInfo = withPag.pagination;
+          paginationContext = `
+=== PAGINATION TERDETEKSI ===
+Tipe: ${paginationInfo.type}
+Selector: ${paginationInfo.selector || "(auto-detect)"}
+Next URL contoh: ${paginationInfo.nextUrl || "(ikuti pattern URL)"}
+${paginationInfo.totalPages ? `Total halaman: ${paginationInfo.totalPages}` : ""}`;
+        }
+      } catch {}
+    }
+
+    const hasSearch = (target||"").toLowerCase().includes("cari") ||
+                      (target||"").toLowerCase().includes("search") ||
+                      (selectors||"").includes("search_form");
+
+    // Determine pagination strategy based on detected type
+    const pagStrategy = paginationInfo.found ? (
+      paginationInfo.type === "rel_next"       ? `ikuti a[rel="next"].href loop sampai tidak ada lagi` :
+      paginationInfo.type === "url_param"      ? `increment page parameter di URL (page=1,2,3,...) loop sampai halaman kosong` :
+      paginationInfo.type === "button_next"    ? `ambil URL dari tombol next ("${paginationInfo.selector}"), follow sampai tidak ada` :
+      paginationInfo.type === "infinite_scroll"? `gunakan parameter page/offset di request, loop sampai response kosong` :
+      `ikuti a[rel="next"] atau increment page parameter`
+    ) : `coba a[rel="next"] dulu, jika tidak ada increment ?page=N atau /page/N`;
 
     const prompt = `Website: ${url}${siteCtx}${pageCtx}${searchCtx}
 Target: ${target}
-${bCF ? "Note: Website pakai proteksi — tambahkan headers browser lengkap + retry 3x" : ""}
+${bCF ? "Website pakai proteksi — gunakan headers browser lengkap + retry 3x" : ""}
 ${domContext}
+${paginationContext}
 
-TUGAS: Buat Express.js router file sebagai API scraper untuk website di atas.
+TUGAS UTAMA: Buat Express.js router sebagai API scraper UNLIMITED — scrape SEMUA halaman sekaligus.
 
-MODES yang harus ada: ${modesStr}
+KONSEP: Scraper ini harus "beranak" — 1 request API mengembalikan SEMUA hasil dari semua halaman.
+Jangan berhenti di halaman 1. Loop terus sampai tidak ada lagi data.
 
-FORMAT WAJIB (ikuti struktur ini PERSIS):
+MODES:
+${hasSearch ? `- mode=list               → semua item halaman 1 s/d selesai (unlimited)
+- mode=search&query=xxx   → cari di semua halaman sampai habis (unlimited)
+- mode=detail&url=xxx     → detail 1 item spesifik` :
+`- mode=list               → SEMUA item dari semua halaman sekaligus (unlimited)
+- mode=detail&url=xxx     → detail lengkap 1 item`}
+
+STRUKTUR FILE (WAJIB PERSIS SEPERTI INI):
 
 const express = require('express');
-const axios = require('axios');
+const axios   = require('axios');
 const cheerio = require('cheerio');
-const router = express.Router();
+const router  = express.Router();
 
 router.tags = ["${siteType||"scraper"}"];
 
 /**
- * Scraper API: ${url}
- * Endpoint: /api/${routeName}?mode=list
- *           /api/${routeName}?mode=search&query=xxx
- *           /api/${routeName}?mode=detail&url=xxx
+ * Scraper API — ${url}
+ * GET /api/${routeName}?mode=list
+ * GET /api/${routeName}?mode=list&limit=50       (opsional, default unlimited)
+ * GET /api/${routeName}?mode=search&query=judul
+ * GET /api/${routeName}?mode=detail&url=https://...
  */
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'id-ID,id;q=0.9,en;q=0.5',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.5',
   'Accept-Encoding': 'gzip, deflate, br',
+  'DNT': '1',
   'Connection': 'keep-alive',
+  'Upgrade-Insecure-Requests': '1',
 };
 
-const fetchHtml = async (url) => {
-  for (let i = 0; i < 3; i++) {
+// Fetch HTML dengan retry otomatis
+const fetchHtml = async (pageUrl) => {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const { data } = await axios.get(url, { headers: HEADERS, timeout: 15000 });
+      const { data } = await axios.get(pageUrl, { headers: HEADERS, timeout: 20000 });
       return data;
-    } catch (e) {
-      if (i === 2) throw e;
-      await new Promise(r => setTimeout(r, 1000 + i * 500));
+    } catch (err) {
+      if (attempt === 2) throw err;
+      await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
     }
   }
 };
 
-// Mode: list — loop $("${bestSel||"article[itemscope]"}").each(...)
-// Ekstrak per item: ${fieldList}
-// Lazy-load img: coba src → data-src → data-lazy → data-original → data-thumbnail_url
-const fetchList = async (baseUrl) => { ... };
+// Parse items dari 1 halaman menggunakan selector: "${bestSel||"article[itemscope]"}"
+// Return { items: [...], nextPageUrl: string|null }
+const parsePage = (html, basePageUrl) => {
+  const $ = cheerio.load(html);
+  const items = [];
 
-// Mode: detail — dari URL item, ekstrak info lengkap
-const fetchDetail = async (itemUrl) => { ... };
+  $("${bestSel||"article[itemscope]"}").each((_, el) => {
+    // Ekstrak semua field: ${fieldList}
+    // Handle lazy-load img: data-src, data-lazy, data-original, data-thumbnail_url, src
+    items.push({ /* field per item */ });
+  });
+
+  // Deteksi next page URL: ${pagStrategy}
+  const nextPageUrl = /* logika next page */ null;
+
+  return { items, nextPageUrl };
+};
+
+// Fetch SEMUA halaman sampai habis — ini yang bikin "beranak"/unlimited
+const fetchAllPages = async (startUrl, limit = 0) => {
+  const allItems = [];
+  let   currentUrl = startUrl;
+  let   pageNum    = 1;
+
+  while (currentUrl) {
+    console.log('Scraping page', pageNum, '-', currentUrl);
+    const html = await fetchHtml(currentUrl);
+    const { items, nextPageUrl } = parsePage(html, currentUrl);
+
+    allItems.push(...items);
+
+    // Stop jika: tidak ada halaman berikutnya, atau limit tercapai
+    if (!nextPageUrl || nextPageUrl === currentUrl) break;
+    if (limit > 0 && allItems.length >= limit) break;
+    if (pageNum >= 50) break; // safety limit
+
+    currentUrl = nextPageUrl;
+    pageNum++;
+    await new Promise(r => setTimeout(r, 800)); // delay sopan
+  }
+
+  return allItems;
+};
+
+// Parse detail 1 item dari halaman detail
+const parseDetail = (html) => {
+  const $ = cheerio.load(html);
+  // Ekstrak semua info detail: title, description, image, rating, year, genre, cast, dll
+  return { /* detail fields */ };
+};
 
 router.get('/', async (req, res) => {
-  const { mode, query, url: itemUrl } = req.query;
-  if (!mode) return res.status(400).json({ status: 'error', message: 'Parameter mode diperlukan' });
+  const { mode, query, url: itemUrl, limit } = req.query;
+  const maxItems = limit ? parseInt(limit, 10) : 0;
+
+  if (!mode) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Parameter mode diperlukan',
+      usage: 'mode=list | mode=search&query=xxx | mode=detail&url=xxx',
+    });
+  }
+
   try {
-    if (mode === 'list') { ... }
-    else if (mode === 'search') { ... }
-    else if (mode === 'detail') { ... }
-    else return res.status(400).json({ status: 'error', message: 'Mode tidak valid' });
-  } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
+    if (mode === 'list') {
+      const items = await fetchAllPages('${url}', maxItems);
+      return res.json({ status: 'success', total: items.length, page_scraped: 'all', results: items });
+
+    } else if (mode === 'search') {
+      if (!query) return res.status(400).json({ status: 'error', message: 'Parameter query diperlukan' });
+      const searchUrl = /* URL search */ '';
+      const items     = await fetchAllPages(searchUrl, maxItems);
+      return res.json({ status: 'success', query, total: items.length, results: items });
+
+    } else if (mode === 'detail') {
+      if (!itemUrl) return res.status(400).json({ status: 'error', message: 'Parameter url diperlukan' });
+      const html   = await fetchHtml(itemUrl);
+      const detail = parseDetail(html);
+      return res.json({ status: 'success', results: detail });
+
+    } else {
+      return res.status(400).json({ status: 'error', message: 'Mode tidak valid: gunakan list, search, atau detail' });
+    }
+  } catch (err) {
+    console.error('[${routeName}]', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
 module.exports = router;
 
-KODE NYATA YANG HARUS DIBUAT (LENGKAP):
-- Selector utama: "${bestSel||"article[itemscope]"}"
-- Field per item: ${fieldList}
-- Handle lazy-load img: src → data-src → data-lazy → data-original → data-thumbnail_url
-- Pagination dalam fetchList: ikuti a[rel=next] atau tambah halaman
-- Setiap fungsi return array/object dengan field yang LENGKAP
-- Response JSON: { status: "success", message: "...", results: [...] }
-- TULIS SEMUA KODE LENGKAP — jangan ada "// ... implement here" atau placeholder apapun`;
+ATURAN KODE — WAJIB DIIKUTI:
+1. Selector NYATA: "${bestSel||"article[itemscope]"}" untuk loop item
+2. Field NYATA per item: ${fieldList}
+   - Lazy-load img: COBA BERURUTAN → data-src, data-lazy, data-lazy-src, data-original, data-thumbnail_url, src
+   - itemprop: gunakan [itemprop="name"], [itemprop="url"], [itemprop="image"] dst jika ada
+3. Pagination: ${pagStrategy}
+   - parsePage() HARUS return nextPageUrl yang valid atau null
+   - fetchAllPages() loop sampai nextPageUrl null atau pageNum >= 50
+4. Search URL: buat URL search dari pola yang terdeteksi di domContext
+5. TULIS SEMUA KODE LENGKAP — TIDAK BOLEH ada "..." atau placeholder apapun
+6. Semua fungsi HARUS punya implementasi nyata yang bisa dijalankan langsung`;
+
 
 
     const code = await (async () => {

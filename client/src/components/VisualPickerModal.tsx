@@ -108,7 +108,7 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
         {ready && (
           <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--neon)",
             background: "rgba(46,255,168,.1)", padding: "2px 8px", borderRadius: 4 }}>
-            ● PICKER AKTIF
+            PICKER AKTIF
           </span>
         )}
         <button onClick={onClose} style={{
@@ -126,10 +126,10 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
         display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
       }}>
         <span style={{ fontSize: 12, color: "var(--text2)" }}>
-          🖱️ <b>Hover</b> untuk highlight · <b>Klik</b> elemen untuk pilih · Klik lagi untuk deselect
+          <b>Hover</b> untuk highlight  ·  <b>Klik</b> untuk pilih  ·  Klik lagi untuk deselect
         </span>
         <span style={{ fontSize: 12, color: "var(--muted)" }}>
-          Elemen yang dipilih otomatis jadi checkbox scraper
+          Selector otomatis disesuaikan dengan section/konteks elemen
         </span>
       </div>
 
@@ -199,12 +199,14 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
                   Klik elemen di preview untuk memilihnya
                 </p>
               </div>
-            ) : picked.map((el, i) => (
+            ) : picked.map((el) => {
+              const pag = (el as any).pagination;
+              return (
               <div key={el.id} style={{
                 background: "rgba(46,255,168,.05)", border: "1px solid rgba(46,255,168,.2)",
                 borderRadius: 8, padding: "8px 10px",
               }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4, flexWrap: "wrap" }}>
                   <span style={{
                     fontFamily: "var(--mono)", fontSize: 9, padding: "1px 6px",
                     borderRadius: 3, background: "rgba(46,255,168,.15)",
@@ -215,6 +217,16 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
                   <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--neon)", fontWeight: 700 }}>
                     {el.count}x
                   </span>
+                  {pag?.found && (
+                    <span style={{
+                      fontFamily: "var(--mono)", fontSize: 9, padding: "1px 6px", borderRadius: 3,
+                      background: "rgba(0,194,255,.15)", color: "var(--neon2)",
+                      border: "1px solid rgba(0,194,255,.3)",
+                    }}>
+                      {pag.type === "infinite_scroll" ? "infinite" :
+                       pag.totalPages ? pag.totalPages + " hal" : "pagination"}
+                    </span>
+                  )}
                 </div>
                 <code style={{
                   fontFamily: "var(--mono)", fontSize: 10, color: "var(--text2)",
@@ -223,8 +235,14 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
                 }}>
                   {el.selector}
                 </code>
+                {pag?.found && pag.nextUrl && (
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--muted)", marginBottom: 4,
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    next: {pag.nextUrl}
+                  </div>
+                )}
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                  {el.rawFields.slice(0, 5).map(f => (
+                  {el.rawFields.slice(0, 5).map((f: string) => (
                     <span key={f} style={{
                       fontFamily: "var(--mono)", fontSize: 8, padding: "1px 5px",
                       borderRadius: 3, background: "rgba(0,0,0,.3)",
@@ -233,7 +251,8 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
                   ))}
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
 
           {/* Apply button */}
