@@ -383,7 +383,7 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
                       const items = byCategory[cat];
                       const nc = items.filter((_,i) => checkedCards[String(scanResult.elements.indexOf(items[i]))]).length;
                       return (
-                        <button key={cat} onClick={() => setActiveCategory(cat)} style={{ display:"flex",alignItems:"center",gap:7,padding:"7px 10px",background:activeCategory===cat?"rgba(46,255,168,.06)":"transparent",borderLeft:activeCategory===cat?"2px solid var(--neon)":"2px solid transparent",cursor:"pointer",textAlign:"left",width:"100%",border:"none",borderLeft:activeCategory===cat?"2px solid var(--neon)":"2px solid transparent" }}>
+                        <button key={cat} onClick={() => setActiveCategory(cat)} style={{ display:"flex",alignItems:"center",gap:7,padding:"7px 10px",background:activeCategory===cat?"rgba(46,255,168,.06)":"transparent",borderLeft:activeCategory===cat?"2px solid var(--neon)":"2px solid transparent",cursor:"pointer",textAlign:"left",width:"100%",border:"none" }}>
                           <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:activeCategory===cat?"var(--neon)":"#7880a0",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{cat}</span>
                           <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:nc>0?"var(--neon)":"#404660" }}>
                             {nc>0?`${nc}/`:""}{items.length}

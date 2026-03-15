@@ -245,14 +245,25 @@ export interface C3SyncResult {
 }
 
 // ── Prefetch / Element Scanner ────────────────────────────────
+export interface PrefetchField {
+  name:   string;
+  value:  string;
+  type?:  string;
+  source?: string;
+}
+
 export interface PrefetchElement {
-  category: string;
-  label:    string;
-  selector: string;
-  preview:  string[];
-  count:    number;
-  target:   string;
-  priority?: number;
+  category:   string;
+  label:      string;
+  selector:   string;
+  preview:    string[];
+  count:      number;
+  target:     string;
+  priority?:  number;
+  source?:    string;
+  itemType?:  string | null;
+  fields?:    PrefetchField[];
+  rawFields?: string[];
 }
 
 export interface ScraperSuggestion {
