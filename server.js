@@ -1080,140 +1080,155 @@ function detectSiteType(url, $, htmlRaw) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  DEEP DOM ANALYSIS ENGINE
-//  Analisa struktur DOM nyata — temukan pola berulang,
-//  ekstrak field aktual, TANPA asumsi nama class apapun
+//  DEEP DOM ANALYSIS ENGINE v2
+//  Priority order:
+//  1. Schema.org microdata (article[itemscope], itemprop)
+//  2. JSON-LD structured data
+//  3. Repeating DOM patterns (tag+class signature)
+//  4. Universal elements (forms, pagination, nav, meta)
 // ══════════════════════════════════════════════════════════════
 
-/**
- * Buat CSS selector unik untuk elemen berdasarkan tag + class (max 2 class)
- */
 function makeSelector(el, $) {
-  const tag  = el.tagName || "div";
-  const cls  = ($(el).attr("class") || "").split(/\s+/).filter(c => c.length > 1 && c.length < 40 && !/^[0-9]/.test(c));
+  const tag = el.tagName || "div";
+  const cls = ($(el).attr("class") || "").split(/\s+/)
+    .filter(c => c.length > 1 && c.length < 40 && !/^[0-9]/.test(c));
   if (cls.length > 0) return `${tag}.${cls.slice(0, 2).join(".")}`;
   const id = $(el).attr("id");
   if (id) return `${tag}#${id}`;
+  const itemType = $(el).attr("itemtype") || "";
+  if (itemType) return `${tag}[itemscope]`;
   return tag;
 }
 
-/**
- * Hitung "kekayaan" konten sebuah elemen — makin banyak field nyata makin tinggi
- */
 function scoreElement(el, $) {
   let score = 0;
-  const texts = $(el).find("*").map((_, c) => $(c).clone().children().remove().end().text().trim()).get().filter(t => t.length > 1);
-  const hasImg    = $(el).find("img[src], img[data-src], img[data-lazy]").length > 0;
-  const hasLink   = $(el).find("a[href]").length > 0;
-  const hasText   = texts.length >= 1;
-  const textLen   = texts.join(" ").length;
-  const hasNum    = texts.some(t => /[\d,\.]+/.test(t));
-  const hasDate   = texts.some(t => /\d{4}|\d{1,2}[\/\-]\d{1,2}/.test(t));
-  if (hasImg)    score += 3;
-  if (hasLink)   score += 2;
-  if (hasText)   score += 1;
+  const hasImg   = $(el).find("img[src], img[data-src], img[data-lazy]").length > 0;
+  const hasLink  = $(el).find("a[href]").length > 0;
+  const txtLen   = $(el).text().trim().length;
+  const hasNum   = /[\d\.]+/.test($(el).text());
+  const hasMicro = $(el).attr("itemscope") !== undefined || $(el).find("[itemprop]").length > 2;
+  if (hasImg)    score += 4;
+  if (hasLink)   score += 3;
+  if (hasMicro)  score += 6;  // microdata = sangat kaya data
   if (hasNum)    score += 1;
-  if (hasDate)   score += 1;
-  if (textLen > 20 && textLen < 500) score += 2;
+  if (txtLen > 20 && txtLen < 2000) score += 2;
   return score;
 }
 
 /**
- * Ekstrak semua field nyata dari sebuah card element
- * Return: { fields: [{name, value, type}], selector }
+ * Ekstrak field dari elemen — prioritaskan itemprop attributes (microdata)
  */
 function extractCardFields(el, $, baseUrl) {
   const fields = [];
   const seen   = new Set();
 
-  const addField = (name, value, type = "text") => {
-    if (!value || seen.has(value.substring(0, 40))) return;
-    seen.add(value.substring(0, 40));
-    fields.push({ name, value: value.substring(0, 200), type });
+  const addField = (name, value, type = "text", source = "dom") => {
+    if (!value || String(value).trim().length < 1) return;
+    const key = name + "::" + String(value).substring(0, 40);
+    if (seen.has(key)) return;
+    seen.add(key);
+    fields.push({ name, value: String(value).substring(0, 300), type, source });
   };
 
-  // ── Judul / Title ─────────────────────────────────────────
-  const titleEl = $(el).find("h1,h2,h3,h4,h5").first();
-  if (titleEl.length) addField("title", titleEl.text().trim(), "text");
+  const absUrl = (href) => {
+    if (!href) return "";
+    if (href.startsWith("http")) return href;
+    if (href.startsWith("//")) return "https:" + href;
+    try { return new URL(href, baseUrl || "https://example.com").href; } catch { return href; }
+  };
 
-  // ── Link utama ────────────────────────────────────────────
-  const linkEl = $(el).find("a[href]").first();
-  if (linkEl.length) {
-    const href = linkEl.attr("href") || "";
-    const absHref = href.startsWith("http") ? href : (baseUrl ? baseUrl.replace(/\/$/, "") + "/" + href.replace(/^\//, "") : href);
-    addField("link", absHref, "url");
-    // jika tidak ada h1-h5, gunakan teks link sebagai title
-    if (!fields.find(f => f.name === "title")) {
-      const linkTxt = linkEl.text().trim();
-      if (linkTxt.length > 2) addField("title", linkTxt, "text");
-    }
-  }
+  // ── PRIORITY 1: itemprop microdata ────────────────────────
+  const itempropMap = {
+    "url":            (el) => addField("link",        absUrl($(el).attr("href") || $(el).attr("content") || $(el).text().trim()), "url",    "microdata"),
+    "name":           (el) => addField("title",       $(el).text().trim() || $(el).attr("content") || "",                         "text",   "microdata"),
+    "description":    (el) => addField("description", $(el).text().trim() || $(el).attr("content") || "",                         "text",   "microdata"),
+    "image":          (el) => addField("image",       absUrl($(el).attr("src") || $(el).attr("content") || ""),                   "url",    "microdata"),
+    "ratingValue":    (el) => addField("rating",      $(el).text().trim() || $(el).attr("content") || "",                         "number", "microdata"),
+    "datePublished":  (el) => addField("year",        ($(el).text().trim() || $(el).attr("content") || "").substring(0, 10),      "text",   "microdata"),
+    "genre":          (el) => addField("genre",       $(el).text().trim(),                                                         "text",   "microdata"),
+    "duration":       (el) => addField("duration",    $(el).text().trim() || $(el).attr("content") || "",                         "text",   "microdata"),
+    "director":       (el) => addField("director",    $(el).text().trim(),                                                         "text",   "microdata"),
+    "actor":          (el) => addField("cast",        $(el).text().trim(),                                                         "text",   "microdata"),
+    "price":          (el) => addField("price",       $(el).text().trim() || $(el).attr("content") || "",                         "price",  "microdata"),
+    "availability":   (el) => addField("stock",       $(el).text().trim() || $(el).attr("content") || "",                         "text",   "microdata"),
+    "episodeNumber":  (el) => addField("episode",     $(el).text().trim() || $(el).attr("content") || "",                         "number", "microdata"),
+    "numberOfEpisodes": (el) => addField("episodes",  $(el).text().trim() || $(el).attr("content") || "",                         "number", "microdata"),
+  };
 
-  // ── Gambar / Poster ───────────────────────────────────────
-  $(el).find("img").each((_, img) => {
-    const src = $(img).attr("src") || $(img).attr("data-src") || $(img).attr("data-lazy-src") ||
-                $(img).attr("data-original") || $(img).attr("data-lazy") || "";
-    if (src && !src.includes("data:") && src.length > 5) {
-      const absSrc = src.startsWith("http") ? src : (baseUrl ? baseUrl.replace(/\/$/, "") + "/" + src.replace(/^\//, "") : src);
-      addField("image", absSrc, "url");
-      return false; // hanya ambil pertama
+  $(el).find("[itemprop]").addBack("[itemprop]").each((_, child) => {
+    const prop = ($(child).attr("itemprop") || "").trim().toLowerCase();
+    if (itempropMap[prop]) {
+      try { itempropMap[prop](child); } catch {}
+    } else if (prop) {
+      // Unknown itemprop — tetap ekstrak
+      const val = $(child).text().trim() || $(child).attr("content") || $(child).attr("src") || "";
+      if (val.length > 0 && val.length < 200) addField(prop, val, "text", "microdata");
     }
   });
 
-  // ── Angka & Harga ─────────────────────────────────────────
-  const allTexts = $(el).find("*").map((_, c) => {
-    const txt = $(c).clone().children().remove().end().text().trim();
-    return { txt, tag: c.tagName, cls: $(c).attr("class") || "" };
-  }).get().filter(t => t.txt.length > 0);
-
-  allTexts.forEach(({ txt, tag, cls }) => {
-    const clsLow = cls.toLowerCase();
-    // Harga
-    if (/^(rp|idr|\$|€|¥|usd)?\s*[\d\.,]+\s*(rb|jt|k|m)?$/i.test(txt) || clsLow.includes("price") || clsLow.includes("harga") || clsLow.includes("cost")) {
-      addField("price", txt, "price");
-    }
-    // Rating / score
-    if (/^\d[\.,]\d$/.test(txt) || /\d+\/\d+/.test(txt) || clsLow.includes("rating") || clsLow.includes("score") || clsLow.includes("imdb") || clsLow.includes("star") || clsLow.includes("vote")) {
-      addField("rating", txt, "number");
-    }
-    // Tahun
-    if (/^(19|20)\d{2}$/.test(txt) || clsLow.includes("year") || clsLow.includes("tahun")) {
-      addField("year", txt, "number");
-    }
-    // Genre
-    if (clsLow.includes("genre") || clsLow.includes("kategori") || clsLow.includes("category") || clsLow.includes("tag")) {
-      addField("genre", txt, "text");
-    }
-    // Kualitas / resolusi
-    if (/^(CAM|TS|HD|FHD|4K|BLURAY|WEB-?DL|HDCAM|480p|720p|1080p)$/i.test(txt) || clsLow.includes("quality") || clsLow.includes("res")) {
-      addField("quality", txt, "text");
-    }
-    // Durasi
-    if (/\d+\s*(min|menit|jam|hour|ep)/i.test(txt) || clsLow.includes("duration") || clsLow.includes("durasi")) {
-      addField("duration", txt, "text");
-    }
-    // Tanggal
-    if (/\d{4}-\d{2}-\d{2}|\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|januari|februari)/i.test(txt) || clsLow.includes("date") || clsLow.includes("tanggal") || tag === "time") {
-      addField("date", txt, "text");
-    }
-    // Badge / status
-    if ((clsLow.includes("badge") || clsLow.includes("label") || clsLow.includes("status")) && txt.length < 30) {
-      addField("badge", txt, "text");
-    }
+  // ── PRIORITY 2: data-* attributes ────────────────────────
+  const dataAttrs = el.attribs || {};
+  Object.keys(dataAttrs).forEach(attr => {
+    if (!attr.startsWith("data-")) return;
+    const val = dataAttrs[attr];
+    if (!val || val.length < 1 || val.length > 300) return;
+    const attrName = attr.replace("data-", "").replace(/-/g, "_");
+    if (attrName === "id" || attrName === "v" || attrName === "key") return;
+    addField(attrName, val, val.startsWith("http") || val.startsWith("/") ? "url" : "text", "data-attr");
   });
 
-  // ── alt text gambar sebagai fallback title ─────────────────
+  // ── PRIORITY 3: Structural DOM (fallback jika tidak ada microdata) ──
   if (!fields.find(f => f.name === "title")) {
-    const alt = $(el).find("img[alt]").first().attr("alt") || "";
-    if (alt.length > 2) addField("title", alt, "text");
+    const titleEl = $(el).find("h1,h2,h3,h4,h5,figcaption").first();
+    if (titleEl.length) addField("title", titleEl.text().trim(), "text", "dom");
+  }
+  if (!fields.find(f => f.name === "link")) {
+    const href = $(el).find("a[href]").first().attr("href") || "";
+    if (href) addField("link", absUrl(href), "url", "dom");
+  }
+  if (!fields.find(f => f.name === "image")) {
+    $(el).find("img").each((_, img) => {
+      const src = $(img).attr("src") || $(img).attr("data-src") ||
+                  $(img).attr("data-lazy-src") || $(img).attr("data-original") ||
+                  $(img).attr("data-lazy") || $(img).attr("data-thumb") || "";
+      if (src && !src.includes("data:image") && !src.includes("blank") && src.length > 5) {
+        addField("image", absUrl(src), "url", "dom");
+        return false;
+      }
+    });
   }
 
-  // ── Semua teks pendek yang belum dikategorikan ─────────────
-  allTexts.forEach(({ txt }) => {
-    if (txt.length > 2 && txt.length < 80 && !seen.has(txt.substring(0, 40))) {
-      const existing = fields.find(f => f.name === "title" || f.name === "link");
-      if (existing && fields.length >= 2) return; // cukup kalau sudah ada title+link
-      addField("info", txt, "text");
+  // ── PRIORITY 4: Text pattern detection ────────────────────
+  $(el).find("span, div, p, strong, em, small").each((_, child) => {
+    const txt = $(child).clone().children().remove().end().text().trim();
+    if (!txt || txt.length < 1 || txt.length > 200) return;
+    const cls = ($(child).attr("class") || "").toLowerCase();
+
+    if (!fields.find(f => f.name === "rating") &&
+        (/^\d[\.,]\d$/.test(txt) || /\d+\/10/.test(txt) ||
+         cls.includes("rating") || cls.includes("score") || cls.includes("imdb") ||
+         cls.includes("star") || cls.includes("vote"))) {
+      addField("rating", txt, "number", "pattern");
+    }
+    if (!fields.find(f => f.name === "year") && /^(19|20)\d{2}$/.test(txt)) {
+      addField("year", txt, "number", "pattern");
+    }
+    if (!fields.find(f => f.name === "quality") &&
+        /^(CAM|HDCAM|TS|HD|FHD|4K|BLURAY|WEB-?DL|WEBRIP|480p|720p|1080p|2160p)$/i.test(txt)) {
+      addField("quality", txt, "text", "pattern");
+    }
+    if (!fields.find(f => f.name === "duration") &&
+        (/\d+\s*(min|menit|jam|hour|ep|eps)/i.test(txt) ||
+         cls.includes("duration") || cls.includes("durasi"))) {
+      addField("duration", txt, "text", "pattern");
+    }
+    if (!fields.find(f => f.name === "episode") &&
+        (/eps?\s*\d+|episode\s*\d+/i.test(txt) || cls.includes("episode") || cls.includes("eps"))) {
+      addField("episode", txt, "text", "pattern");
+    }
+    if (!fields.find(f => f.name === "price") &&
+        /^(rp|idr|\$|€)?[\s]?[\d\.,]+\s*(rb|jt|k)?$/i.test(txt)) {
+      addField("price", txt, "price", "pattern");
     }
   });
 
@@ -1221,147 +1236,227 @@ function extractCardFields(el, $, baseUrl) {
 }
 
 /**
- * Temukan grup elemen berulang dengan struktur paling konsisten
- * Algoritma: grouping by tag + class signature, lalu score setiap grup
+ * PRIORITY 1: Deteksi Schema.org microdata elements
+ * article[itemscope], div[itemscope], li[itemscope] — sangat reliable
  */
-function findRepeatingGroups($, minCount = 3, maxGroups = 8) {
+function findMicrodataGroups($) {
+  const groups = {};
+
+  $("[itemscope]").each((_, el) => {
+    const itemType = $(el).attr("itemtype") || "unknown";
+    // Jangan ambil nested itemscope (hanya top-level)
+    if ($(el).parents("[itemscope]").length > 0) return;
+    // Jangan ambil elemen yang ada di nav/header/footer
+    if ($(el).closest("nav, header, footer").length > 0) return;
+
+    const typeShort = itemType.split("/").pop() || "Item";
+    if (!groups[typeShort]) groups[typeShort] = { itemType, typeShort, els: [] };
+    groups[typeShort].els.push(el);
+  });
+
+  return Object.values(groups).filter(g => g.els.length >= 1);
+}
+
+/**
+ * PRIORITY 2: Repeating DOM groups (fallback jika tidak ada microdata)
+ */
+function findRepeatingGroups($, minCount = 3, maxGroups = 6) {
   const sigMap = {};
 
   $("li, article, div, tr").each((_, el) => {
-    const tag      = el.tagName;
-    const cls      = ($(el).attr("class") || "").split(/\s+/).filter(c => c.length > 1 && c.length < 50 && !/^[0-9]/.test(c));
+    const tag = el.tagName;
+    const cls = ($(el).attr("class") || "").split(/\s+/)
+      .filter(c => c.length > 1 && c.length < 50 && !/^[0-9]/.test(c));
+
+    // Butuh setidaknya 1 class untuk jadi signature
     if (cls.length === 0) return;
 
-    const sig      = `${tag}.${cls.slice(0, 2).sort().join(".")}`;
-    const children = $(el).children().length;
-    const txtLen   = $(el).text().trim().length;
+    const sig     = `${tag}.${cls.slice(0, 2).sort().join(".")}`;
+    const txtLen  = $(el).text().trim().length;
+    const childCt = $(el).children().length;
 
-    // Filter: jangan ambil elemen terlalu kecil atau terlalu besar
-    if (children < 1 || txtLen < 5 || txtLen > 8000) return;
-    // Jangan ambil elemen navigasi / footer / header
-    const parent  = $(el).closest("nav, header, footer, [class*='nav'], [class*='menu'], [class*='sidebar']");
-    if (parent.length) return;
+    if (childCt < 1 || txtLen < 10 || txtLen > 10000) return;
+    // Skip nav/header/footer/sidebar
+    if ($(el).closest("nav, header, footer, [class*='nav'], [class*='menu'], [class*='sidebar'], [class*='footer'], [class*='header']").length) return;
+    // Skip elemen yang merupakan container dari repeating group lain (terlalu besar)
+    if (txtLen > 3000 && childCt < 3) return;
 
-    if (!sigMap[sig]) sigMap[sig] = { sig, els: [], score: 0 };
+    if (!sigMap[sig]) sigMap[sig] = { sig, sel: `${tag}.${cls[0]}`, els: [], score: 0 };
     sigMap[sig].els.push(el);
   });
 
-  // Score setiap grup: lebih banyak elemen & lebih kaya konten = lebih tinggi
-  const groups = Object.values(sigMap)
+  return Object.values(sigMap)
     .filter(g => g.els.length >= minCount)
     .map(g => {
-      const sample  = g.els.slice(0, 3);
+      const sample   = g.els.slice(0, 3);
       const avgScore = sample.reduce((s, el) => s + scoreElement(el, $), 0) / sample.length;
-      const hasImg   = sample.some(el => $(el).find("img").length > 0);
+      const hasImg   = sample.some(el => $(el).find("img[src], img[data-src]").length > 0);
       const hasLink  = sample.some(el => $(el).find("a[href]").length > 0);
-      g.score = g.els.length * 0.3 + avgScore * 2 + (hasImg ? 5 : 0) + (hasLink ? 3 : 0);
+      g.score = g.els.length * 0.4 + avgScore * 2.5 + (hasImg ? 6 : 0) + (hasLink ? 4 : 0);
       return g;
     })
     .sort((a, b) => b.score - a.score)
     .slice(0, maxGroups);
-
-  return groups;
 }
 
 /**
- * Engine utama: deep DOM analysis
+ * ENGINE UTAMA: Deep DOM Analysis
  */
 function detectSmartElements(url, $, htmlRaw, siteType) {
   const elements = [];
-  const baseUrl  = (() => { try { const u = new URL(url); return `${u.protocol}//${u.hostname}`; } catch { return ""; } })();
+  const baseUrl  = (() => {
+    try { const u = new URL(url); return `${u.protocol}//${u.hostname}`; } catch { return ""; }
+  })();
 
-  // ── 1. JSON-LD structured data (paling akurat) ────────────
-  const jsonLdItems = [];
-  $("script[type='application/ld+json']").each((_, el) => {
-    try {
-      const obj = JSON.parse($(el).text().trim());
-      const type = obj["@type"] || (Array.isArray(obj) ? obj[0]?.["@type"] : null) || "Unknown";
-      const name = obj.name || obj.headline || obj.title || "";
-      jsonLdItems.push({ type, name });
-    } catch {}
-  });
-  if (jsonLdItems.length) {
-    const types = [...new Set(jsonLdItems.map(j => j.type))];
-    const names = jsonLdItems.slice(0, 3).map(j => j.name).filter(Boolean);
-    elements.push({
-      category: "structured",
-      label:    `JSON-LD: ${types.join(", ")} (${jsonLdItems.length} item)`,
-      selector: "script[type='application/ld+json']",
-      preview:  names.length ? names : types,
-      count:    jsonLdItems.length,
-      target:   `JSON-LD structured data: ${types.join(", ")} — ambil semua field: name, url, image, description, price, datePublished, dll`,
-      priority: 10,
-      fields:   types.map(t => ({ name: "@type", value: t, type: "text" })),
-    });
-  }
+  // ══════════════════════════════════════════════════════════
+  //  LAYER 1: Schema.org Microdata (PALING AKURAT)
+  // ══════════════════════════════════════════════════════════
+  const microdataGroups = findMicrodataGroups($);
 
-  // ── 2. Deep DOM: temukan grup elemen berulang ─────────────
-  const groups = findRepeatingGroups($);
+  microdataGroups.forEach(group => {
+    const sampleEls = group.els.slice(0, 5);
+    const allFields = sampleEls.map(el => extractCardFields(el, $, baseUrl));
 
-  groups.forEach((group, groupIdx) => {
-    if (!group.els.length) return;
-
-    // Ekstrak field dari beberapa sampel card
-    const sampleEls  = group.els.slice(0, 5);
-    const allFields  = sampleEls.map(el => extractCardFields(el, $, baseUrl));
-
-    // Kumpulkan nama field yang konsisten (muncul di >= 50% sampel)
+    // Count field consistency
     const fieldCounts = {};
-    allFields.forEach(fs => fs.forEach(f => { fieldCounts[f.name] = (fieldCounts[f.name] || 0) + 1; }));
-    const consistentFields = Object.keys(fieldCounts).filter(fn => fieldCounts[fn] >= Math.ceil(sampleEls.length * 0.4));
+    allFields.forEach(fs => fs.forEach(f => {
+      fieldCounts[f.name] = (fieldCounts[f.name] || 0) + 1;
+    }));
+    const consistentFields = Object.keys(fieldCounts)
+      .filter(fn => fieldCounts[fn] >= Math.ceil(sampleEls.length * 0.3))
+      .sort((a, b) => fieldCounts[b] - fieldCounts[a]);
 
-    if (consistentFields.length === 0 && !group.els[0]) return;
-
-    // Ambil preview dari sample pertama
     const firstFields  = allFields[0] || [];
     const previewLines = [];
 
-    // Buat preview yang informatif
-    const titleField = firstFields.find(f => f.name === "title");
-    const linkField  = firstFields.find(f => f.name === "link");
-    const imgField   = firstFields.find(f => f.name === "image");
-    const priceField = firstFields.find(f => f.name === "price");
-    const ratingField= firstFields.find(f => f.name === "rating");
-    const yearField  = firstFields.find(f => f.name === "year");
-    const qualField  = firstFields.find(f => f.name === "quality");
-    const dateField  = firstFields.find(f => f.name === "date");
+    const fv = (name) => firstFields.find(f => f.name === name)?.value || "";
+    if (fv("title"))    previewLines.push(`📌 ${fv("title")}`);
+    if (fv("rating"))   previewLines.push(`⭐ ${fv("rating")}`);
+    if (fv("year"))     previewLines.push(`📅 ${fv("year")}`);
+    if (fv("quality"))  previewLines.push(`🎬 ${fv("quality")}`);
+    if (fv("episode"))  previewLines.push(`📺 Ep. ${fv("episode")}`);
+    if (fv("duration")) previewLines.push(`⏱ ${fv("duration")}`);
+    if (fv("image"))    previewLines.push(`🖼️ ${fv("image").substring(0, 80)}`);
+    if (fv("link"))     previewLines.push(`🔗 ${fv("link").substring(0, 80)}`);
 
-    if (titleField)  previewLines.push(`📌 ${titleField.value}`);
-    if (priceField)  previewLines.push(`💰 ${priceField.value}`);
-    if (ratingField) previewLines.push(`⭐ ${ratingField.value}`);
-    if (yearField)   previewLines.push(`📅 ${yearField.value}`);
-    if (qualField)   previewLines.push(`📺 ${qualField.value}`);
-    if (dateField)   previewLines.push(`📅 ${dateField.value}`);
-    if (imgField)    previewLines.push(`🖼️ ${imgField.value.substring(0, 80)}`);
-    if (linkField)   previewLines.push(`🔗 ${linkField.value.substring(0, 80)}`);
-
-    // Tambah preview dari sample ke-2 dan ke-3
+    // Add more from samples 2-3
     [allFields[1], allFields[2]].forEach(fs => {
       if (!fs) return;
       const t = fs.find(f => f.name === "title");
-      const p = fs.find(f => f.name === "price");
-      if (t) previewLines.push(`📌 ${t.value}`);
-      if (p && p.name !== priceField?.name) previewLines.push(`💰 ${p.value}`);
+      if (t && !previewLines.some(l => l.includes(t.value.substring(0, 20)))) {
+        previewLines.push(`📌 ${t.value}`);
+      }
     });
 
-    // Tentukan label berdasarkan field yang ditemukan
-    const fieldNames = consistentFields;
-    let cardType = "Item";
-    if (fieldNames.includes("quality") || fieldNames.includes("rating")) {
-      cardType = siteType === "streaming" ? "Film/Video" : "Media";
-    } else if (fieldNames.includes("price")) {
-      cardType = "Produk";
-    } else if (fieldNames.includes("date")) {
-      cardType = "Artikel/Post";
-    } else if (titleField && linkField) {
-      cardType = "Card";
-    }
+    const sel = `article[itemscope][itemtype*="${group.typeShort}"], [itemtype*="${group.typeShort}"][itemscope]`;
+    const simpleSel = makeSelector(group.els[0], $);
 
-    const sel = makeSelector(group.els[0], $);
+    elements.push({
+      category:  group.typeShort.toLowerCase(),
+      label:     `${group.typeShort} (${group.els.length} item) — microdata: ${consistentFields.slice(0, 5).join(", ")}`,
+      selector:  simpleSel,
+      selectorFull: sel,
+      preview:   previewLines.slice(0, 6),
+      count:     group.els.length,
+      target:    `${group.els.length} ${group.typeShort} dari microdata — field: ${consistentFields.join(", ")} — selector: ${simpleSel}`,
+      priority:  20 + group.els.length,
+      fields:    firstFields,
+      rawFields: consistentFields,
+      source:    "microdata",
+      itemType:  group.itemType,
+    });
+  });
 
-    // Bangun target string yang informatif
-    const fieldList = consistentFields.join(", ");
-    const targetStr = `${group.els.length} ${cardType} — field: ${fieldList || "title, link, image"} — selector: ${sel}`;
+  // ══════════════════════════════════════════════════════════
+  //  LAYER 2: JSON-LD Structured Data
+  // ══════════════════════════════════════════════════════════
+  const jsonLdItems = [];
+  $("script[type='application/ld+json']").each((_, el) => {
+    try {
+      const raw = $(el).text().trim();
+      const obj = JSON.parse(raw);
+      const items = Array.isArray(obj) ? obj : [obj];
+      items.forEach(item => {
+        if (!item) return;
+        const type = item["@type"] || "Unknown";
+        const entry = { type, raw: JSON.stringify(item).substring(0, 500) };
+        // Extract key fields from JSON-LD
+        const fields = [];
+        ["name","headline","title","url","image","description","datePublished",
+         "price","ratingValue","author","genre","duration"].forEach(k => {
+          if (item[k]) fields.push({ name: k, value: String(typeof item[k] === "object" ? JSON.stringify(item[k]) : item[k]).substring(0, 150), type: "text" });
+        });
+        entry.fields = fields;
+        jsonLdItems.push(entry);
+      });
+    } catch {}
+  });
+
+  if (jsonLdItems.length) {
+    const types = [...new Set(jsonLdItems.map(j => j.type))];
+    const previewFields = (jsonLdItems[0]?.fields || []).map(f => `${f.name}: ${f.value.substring(0, 60)}`);
+    elements.push({
+      category:  "structured",
+      label:     `JSON-LD: ${types.join(", ")} (${jsonLdItems.length} objek)`,
+      selector:  "script[type='application/ld+json']",
+      preview:   previewFields.slice(0, 5),
+      count:     jsonLdItems.length,
+      target:    `JSON-LD ${types.join("/")} — field tersedia: ${(jsonLdItems[0]?.fields||[]).map(f=>f.name).join(", ")}`,
+      priority:  18,
+      fields:    jsonLdItems[0]?.fields || [],
+      rawFields: (jsonLdItems[0]?.fields || []).map(f => f.name),
+      source:    "json-ld",
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  LAYER 3: Repeating DOM Groups (jika microdata kosong)
+  // ══════════════════════════════════════════════════════════
+  const microdataSelectors = new Set(elements.map(e => e.selector));
+  const groups = findRepeatingGroups($);
+
+  groups.forEach(group => {
+    // Skip jika sudah ditangkap microdata
+    const sel = group.sel || makeSelector(group.els[0], $);
+    if (microdataSelectors.has(sel)) return;
+
+    const sampleEls  = group.els.slice(0, 5);
+    const allFields  = sampleEls.map(el => extractCardFields(el, $, baseUrl));
+
+    const fieldCounts = {};
+    allFields.forEach(fs => fs.forEach(f => {
+      fieldCounts[f.name] = (fieldCounts[f.name] || 0) + 1;
+    }));
+    const consistentFields = Object.keys(fieldCounts)
+      .filter(fn => fieldCounts[fn] >= Math.ceil(sampleEls.length * 0.4))
+      .sort((a, b) => fieldCounts[b] - fieldCounts[a]);
+
+    if (consistentFields.length === 0) return;
+
+    const firstFields  = allFields[0] || [];
+    const previewLines = [];
+    const fv = (name) => firstFields.find(f => f.name === name)?.value || "";
+
+    if (fv("title"))    previewLines.push(`📌 ${fv("title")}`);
+    if (fv("price"))    previewLines.push(`💰 ${fv("price")}`);
+    if (fv("rating"))   previewLines.push(`⭐ ${fv("rating")}`);
+    if (fv("year"))     previewLines.push(`📅 ${fv("year")}`);
+    if (fv("quality"))  previewLines.push(`🎬 ${fv("quality")}`);
+    if (fv("image"))    previewLines.push(`🖼️ ${fv("image").substring(0, 70)}`);
+    if (fv("link"))     previewLines.push(`🔗 ${fv("link").substring(0, 70)}`);
+
+    [allFields[1], allFields[2]].forEach(fs => {
+      if (!fs) return;
+      const t = fs.find(f => f.name === "title");
+      if (t && !previewLines.some(l => l.includes(t.value.substring(0, 15)))) {
+        previewLines.push(`📌 ${t.value}`);
+      }
+    });
+
+    let cardType = "Card";
+    if (consistentFields.includes("quality") || consistentFields.includes("rating")) cardType = "Film/Video";
+    else if (consistentFields.includes("price")) cardType = "Produk";
+    else if (consistentFields.includes("date")) cardType = "Artikel";
 
     elements.push({
       category:  cardType.toLowerCase().replace("/", "_"),
@@ -1369,208 +1464,215 @@ function detectSmartElements(url, $, htmlRaw, siteType) {
       selector:  sel,
       preview:   previewLines.slice(0, 6),
       count:     group.els.length,
-      target:    targetStr,
+      target:    `${group.els.length} ${cardType} — field: ${consistentFields.join(", ")} — selector: ${sel}`,
       priority:  Math.round(group.score),
       fields:    firstFields,
       rawFields: consistentFields,
+      source:    "dom",
     });
   });
 
-  // ── 3. Search form / input ────────────────────────────────
-  const searchForms = $("form").filter((_, form) => {
-    const hasSearch = $(form).find("input[type='search'], input[name*='search'], input[name='s'], input[name='q'], input[placeholder*='cari'], input[placeholder*='search']").length > 0;
-    return hasSearch;
-  });
-  if (searchForms.length) {
-    const action  = searchForms.first().attr("action") || "";
-    const method  = (searchForms.first().attr("method") || "GET").toUpperCase();
-    const inputName = searchForms.first().find("input[type='search'], input[name*='search'], input[name='s'], input[name='q']").first().attr("name") || "q";
+  // ══════════════════════════════════════════════════════════
+  //  LAYER 4: Universal Elements
+  // ══════════════════════════════════════════════════════════
+
+  // Search form
+  $("form").each((_, form) => {
+    const inputs = $(form).find("input");
+    const isSearch = inputs.filter((_, inp) => {
+      const t   = ($(inp).attr("type")        || "").toLowerCase();
+      const n   = ($(inp).attr("name")        || "").toLowerCase();
+      const p   = ($(inp).attr("placeholder") || "").toLowerCase();
+      return t === "search" || n.includes("search") || n === "s" || n === "q" ||
+             p.includes("cari") || p.includes("search") || p.includes("find");
+    }).length > 0;
+    if (!isSearch) return;
+
+    const action     = $(form).attr("action") || "";
+    const method     = ($(form).attr("method") || "GET").toUpperCase();
+    const inputNames = inputs.map((_, i) => $(i).attr("name") || "").get().filter(Boolean);
+
     elements.push({
       category: "search_form",
-      label:    `Form Pencarian`,
-      selector: `form[action="${action}"]`,
-      preview:  [
-        `Action: ${action || "(same page)"}`,
-        `Method: ${method}`,
-        `Input param: ${inputName}`,
-      ],
-      count:    searchForms.length,
-      target:   `form pencarian: kirim keyword ke ${action || "URL saat ini"} dengan param ${inputName}, scrape semua hasil`,
-      priority: 7,
-    });
-  }
-
-  // ── 4. Navigasi / Menu links (genre, kategori, dll) ───────
-  const navGroups = {};
-  $("nav a[href], [class*='menu'] a[href], [class*='genre'] a[href], [class*='cat'] a[href], [class*='nav'] a[href]").each((_, a) => {
-    const href   = $(a).attr("href") || "";
-    const txt    = $(a).text().trim();
-    const parent = $(a).closest("nav, [class*='menu'], [class*='genre'], [class*='cat'], [class*='nav']");
-    if (!txt || txt.length < 1 || txt.length > 60 || !parent.length) return;
-    const parentSig = makeSelector(parent[0], $);
-    if (!navGroups[parentSig]) navGroups[parentSig] = { sel: parentSig, items: [] };
-    navGroups[parentSig].items.push({ txt, href });
-  });
-
-  Object.values(navGroups).forEach(nav => {
-    if (nav.items.length < 3) return;
-    const uniqueItems = [...new Map(nav.items.map(i => [i.txt, i])).values()];
-    if (uniqueItems.length < 3) return;
-    elements.push({
-      category: "navigation",
-      label:    `Navigasi: ${uniqueItems.slice(0, 3).map(i => i.txt).join(", ")}... (${uniqueItems.length})`,
-      selector: `${nav.sel} a`,
-      preview:  uniqueItems.slice(0, 5).map(i => `${i.txt} → ${i.href}`),
-      count:    uniqueItems.length,
-      target:   `navigasi/menu: ${uniqueItems.map(i => i.txt).slice(0, 6).join(", ")} — nama dan URL tiap link`,
-      priority: 5,
+      label:    `Form Pencarian → ${action || "(halaman ini)"}`,
+      selector: action ? `form[action="${action}"]` : "form",
+      preview:  [`Action: ${action || "(halaman ini)"}`, `Method: ${method}`, `Params: ${inputNames.join(", ")}`],
+      count:    1,
+      target:   `form pencarian: kirim keyword ke "${action || url}" dengan params ${inputNames.join(", ")}, ambil semua hasil`,
+      priority: 8,
+      source:   "dom",
     });
   });
 
-  // ── 5. Tabel HTML ─────────────────────────────────────────
-  $("table").each((ti, tbl) => {
-    const headers = $(tbl).find("tr:first-child th, thead th").map((_, th) => $(th).text().trim()).get().filter(Boolean);
-    const rows    = $(tbl).find("tbody tr").length || $(tbl).find("tr").length - 1;
-    if (rows < 2) return;
-    const sampleRow = [];
-    $(tbl).find("tbody tr, tr").slice(1, 3).each((_, tr) => {
-      const cells = $(tr).find("td").map((_, td) => $(td).text().trim()).get().filter(Boolean);
-      if (cells.length) sampleRow.push(cells.slice(0, 4).join(" | "));
-    });
-    elements.push({
-      category: "table",
-      label:    `Tabel: ${headers.slice(0, 4).join(", ") || "(no header)"} (${rows} baris)`,
-      selector: `table:nth-of-type(${ti + 1})`,
-      preview:  [headers.length ? `Kolom: ${headers.join(", ")}` : "(no header)", ...sampleRow.slice(0, 2)],
-      count:    rows,
-      target:   `tabel data: ${headers.length ? headers.join(", ") : "semua kolom"} — ${rows} baris data`,
-      priority: 6,
-    });
+  // Pagination
+  const nextLink = $("a[rel='next']").first().attr("href") ||
+                   $("a").filter((_, a) => /next|selanjutnya|»|›|\bnext\b/i.test($(a).text().trim())).first().attr("href") ||
+                   $("[class*='next'] a, [class*='pagination'] a").last().attr("href") || "";
+  const pageLinks = $("[class*='pagination'] a, [class*='paging'] a, a[href*='page='], a[href*='/page/']").filter((_, a) => {
+    return /^\d+$/.test($(a).text().trim()) || /next|prev|»|«/i.test($(a).text().trim());
   });
 
-  // ── 6. Pagination ─────────────────────────────────────────
-  const paginationEl = $("a[href*='page'], a[href*='hal='], a[rel='next'], a[class*='next'], [class*='pagination'] a, [class*='paging'] a, [class*='page-numbers'] a").filter((_, a) => {
-    const txt = $(a).text().trim();
-    return txt && (txt.match(/^\d+$/) || /next|selanjutnya|»|›/i.test(txt));
-  });
-  if (paginationEl.length) {
-    const pageLinks = paginationEl.map((_, a) => `${$(a).text().trim()} → ${$(a).attr("href") || ""}`).get().slice(0, 4);
-    const nextHref  = $("a[rel='next']").first().attr("href") || paginationEl.last().attr("href") || "";
+  if (pageLinks.length > 0 || nextLink) {
     elements.push({
       category: "pagination",
-      label:    `Pagination (${paginationEl.length} link halaman)`,
+      label:    `Pagination (${pageLinks.length} link)`,
       selector: "a[rel='next'], [class*='pagination'] a",
-      preview:  [...pageLinks, nextHref ? `Next URL: ${nextHref}` : ""].filter(Boolean),
-      count:    paginationEl.length,
-      target:   `multi-halaman: ikuti link "${nextHref || "halaman berikutnya"}" untuk scraping semua halaman`,
-      priority: 4,
+      preview:  [
+        nextLink ? `Next URL: ${absUrl(nextLink, baseUrl)}` : "",
+        ...pageLinks.slice(0, 3).map((_, a) => `${$(a).text().trim()} → ${$(a).attr("href") || ""}`).get(),
+      ].filter(Boolean),
+      count:    pageLinks.length,
+      target:   `pagination: ikuti "${nextLink || "halaman berikutnya"}" untuk scrape semua halaman`,
+      priority: 5,
+      source:   "dom",
     });
   }
 
-  // ── 7. Meta / OG tags ─────────────────────────────────────
+  // Navigation links (genre, kategori)
+  const navLinkGroups = {};
+  $("nav a[href], [class*='genre'] a, [class*='cat'] a, [class*='menu'] a").each((_, a) => {
+    const href   = $(a).attr("href") || "";
+    const txt    = $(a).text().trim();
+    const parent = $(a).parent()[0];
+    if (!txt || txt.length > 50 || !parent) return;
+    const pSig   = makeSelector(parent, $);
+    if (!navLinkGroups[pSig]) navLinkGroups[pSig] = [];
+    navLinkGroups[pSig].push({ txt, href });
+  });
+  Object.values(navLinkGroups).forEach(items => {
+    if (items.length < 3) return;
+    const unique = [...new Map(items.map(i => [i.txt, i])).values()];
+    if (unique.length < 3) return;
+    elements.push({
+      category: "navigation",
+      label:    `Navigasi: ${unique.slice(0, 3).map(i => i.txt).join(", ")}... (${unique.length})`,
+      selector: "nav a",
+      preview:  unique.slice(0, 5).map(i => `${i.txt} → ${i.href}`),
+      count:    unique.length,
+      target:   `navigasi: ${unique.map(i => i.txt).slice(0, 6).join(", ")} — nama dan URL tiap link`,
+      priority: 4,
+      source:   "dom",
+    });
+  });
+
+  // Meta tags
   const metaData = [];
   $("meta[name], meta[property]").each((_, el) => {
-    const name = $(el).attr("name") || $(el).attr("property") || "";
+    const name    = $(el).attr("name") || $(el).attr("property") || "";
     const content = $(el).attr("content") || "";
     if (!name || !content || content.length < 3) return;
-    if (/viewport|charset|robots|generator|author|theme/i.test(name)) return;
+    if (/viewport|charset|robots|generator|theme|verify/i.test(name)) return;
     metaData.push(`${name}: ${content.substring(0, 80)}`);
   });
   if (metaData.length) {
     elements.push({
       category: "meta",
-      label:    `Meta/OG Tags (${metaData.length} tag)`,
+      label:    `Meta/OG Tags (${metaData.length})`,
       selector: "meta[name], meta[property]",
       preview:  metaData.slice(0, 5),
       count:    metaData.length,
-      target:   `meta tags: og:title, og:image, og:description, og:url, keywords — ideal untuk SEO data`,
-      priority: 3,
+      target:   `meta tags: ${metaData.slice(0, 3).map(m => m.split(":")[0]).join(", ")}`,
+      priority: 2,
+      source:   "dom",
     });
   }
 
-  // Sort by priority desc, remove duplicates by category (keep highest score per category)
+  // Sort by priority, deduplicate
   const seen = new Set();
-  const result = elements
+  return elements
     .sort((a, b) => (b.priority || 0) - (a.priority || 0))
     .filter(e => {
-      const key = e.category + "::" + e.selector;
+      const key = `${e.category}::${e.selector}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+}
 
-  return result;
+function absUrl(href, baseUrl) {
+  if (!href) return "";
+  if (href.startsWith("http")) return href;
+  if (href.startsWith("//")) return "https:" + href;
+  try { return new URL(href, baseUrl || "https://example.com").href; } catch { return href; }
 }
 
 /**
- * Build smart suggestions dari deep DOM analysis result
+ * Build smart suggestions dari hasil deep DOM analysis
  */
 function getScraperSuggestions(siteType, elements) {
   const suggestions = [];
 
-  // Dari elemen yang ditemukan (paling akurat)
-  elements.forEach(el => {
-    if (el.category === "structured") {
-      suggestions.push({
-        label: `🗄️ ${el.label}`,
-        desc:  `Ekstrak JSON-LD ${el.preview.slice(0, 2).join(", ")} — data terstruktur paling akurat dan reliable`,
-      });
-    } else if (["film_video", "produk", "artikel_post", "card", "media", "item"].includes(el.category)) {
-      const fields = el.rawFields || [];
-      const fieldStr = fields.slice(0, 5).join(", ");
-      suggestions.push({
-        label: `📦 ${el.label}`,
-        desc:  `Scrape ${el.count} item — field: ${fieldStr || "title, link, image"} — gunakan selector: ${el.selector}`,
-      });
-    } else if (el.category === "search_form") {
-      suggestions.push({
-        label: `🔍 Scraper Pencarian`,
-        desc:  `${el.target}`,
-      });
-    } else if (el.category === "pagination") {
-      suggestions.push({
-        label: `📄 Scrape Semua Halaman (Auto-Pagination)`,
-        desc:  `Ikuti semua halaman secara otomatis — ${el.target}`,
-      });
-    }
+  // Dari microdata elements (paling reliable)
+  elements.filter(e => e.source === "microdata").forEach(el => {
+    const fields = (el.rawFields || []).slice(0, 6).join(", ");
+    suggestions.push({
+      label: `🎯 ${el.label}`,
+      desc:  `Scrape ${el.count} ${el.category} menggunakan selector "${el.selector}" — field: ${fields} — data dari Schema.org microdata (sangat akurat)`,
+    });
   });
 
-  // Tambah suggestions kontekstual berdasarkan siteType
+  // Dari JSON-LD
+  elements.filter(e => e.source === "json-ld").forEach(el => {
+    suggestions.push({
+      label: `🗄️ ${el.label}`,
+      desc:  `Ekstrak JSON-LD embedded: ${el.target}`,
+    });
+  });
+
+  // Dari DOM repeating groups
+  elements.filter(e => e.source === "dom" && ["film_video","produk","artikel","card"].includes(e.category)).forEach(el => {
+    const fields = (el.rawFields || []).slice(0, 5).join(", ");
+    suggestions.push({
+      label: `📦 ${el.label}`,
+      desc:  `Scrape ${el.count} item dengan selector "${el.selector}" — field: ${fields}`,
+    });
+  });
+
+  // Search form
+  elements.filter(e => e.category === "search_form").forEach(el => {
+    suggestions.push({
+      label: `🔍 Hasil Pencarian`,
+      desc:  el.target,
+    });
+  });
+
+  // Pagination
+  elements.filter(e => e.category === "pagination").forEach(el => {
+    suggestions.push({
+      label: `📄 Semua Halaman (Auto-Pagination)`,
+      desc:  el.target,
+    });
+  });
+
+  // Context-based additions
   const contextual = {
     streaming: [
-      { label: "🎬 Daftar Film + Poster + Rating", desc: "Scrape semua film: judul, URL poster, tahun, rating, genre, link detail — dengan auto-pagination" },
-      { label: "📺 Episode & Link Streaming", desc: "Dari halaman detail film/series: ambil semua episode beserta link nonton langsung" },
-      { label: "🎭 Info Lengkap per Film", desc: "Detail film: sinopsis, pemain, sutradara, tahun, genre, durasi, rating IMDB, embed player URL" },
+      { label: "🎬 Daftar Film + Poster + Rating", desc: "Scrape semua film: judul, URL poster, tahun, rating, genre, episode count, link detail — dengan auto-pagination" },
+      { label: "📺 Episode & Link Streaming",       desc: "Dari halaman detail film/series: ambil semua episode beserta link streaming" },
+      { label: "🎭 Detail Film Lengkap",             desc: "Detail: sinopsis, pemain, sutradara, tahun, genre, durasi, rating IMDB, embed player URL" },
     ],
     ecommerce: [
-      { label: "🛍️ Produk + Harga + Rating", desc: "Scrape semua produk: nama, harga normal, harga diskon, rating bintang, jumlah review, URL gambar" },
-      { label: "⭐ Review & Komentar Pembeli", desc: "Dari halaman produk: ambil semua review dengan bintang, teks, nama pembeli, tanggal" },
+      { label: "🛍️ Produk + Harga + Rating",        desc: "Scrape semua produk: nama, harga normal, harga diskon, rating, jumlah review, URL gambar, link" },
+      { label: "⭐ Review & Komentar Pembeli",       desc: "Dari halaman produk: bintang, teks review, nama pembeli, tanggal" },
     ],
     news: [
-      { label: "📰 Berita + Tanggal + Penulis", desc: "Scrape daftar berita: judul, tanggal terbit, nama penulis, thumbnail, link artikel" },
-      { label: "📝 Isi Artikel Lengkap", desc: "Buka tiap artikel dan scrape: judul, paragraf lengkap, gambar, tags, tanggal" },
-    ],
-    forum: [
-      { label: "💬 Thread + Reply + Views", desc: "Scrape daftar thread: judul, jumlah reply, views, nama OP, tanggal" },
+      { label: "📰 Berita + Tanggal + Penulis",      desc: "Scrape daftar berita: judul, tanggal, nama penulis, thumbnail, link artikel" },
+      { label: "📝 Isi Artikel Lengkap",             desc: "Buka tiap artikel: judul, semua paragraf, gambar, tags, tanggal" },
     ],
   };
-
   (contextual[siteType] || []).forEach(s => {
     if (!suggestions.some(x => x.label === s.label)) suggestions.push(s);
   });
 
-  // Universal fallbacks
-  if (!suggestions.some(s => s.label.includes("Pagination"))) {
+  if (!suggestions.some(s => s.label.includes("Pagination") || s.label.includes("Halaman"))) {
     suggestions.push({
       label: "📄 Scrape Semua Halaman",
-      desc:  "Auto-follow pagination: scrape dari halaman 1 sampai halaman terakhir, kumpulkan semua data",
+      desc:  "Auto-follow pagination: scrape dari halaman 1 sampai terakhir, kumpulkan semua data",
     });
   }
 
   return suggestions.slice(0, 8);
 }
-
-
 
 // ── POST /api/url-detect ───────────────────────────────────────
 // Deteksi tipe halaman INSTAN dari URL tanpa fetch — pure URL pattern analysis
@@ -2345,77 +2447,142 @@ ${bCF ? "PENTING: Gunakan cURL dengan full browser headers, rotate User-Agent, s
 - echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);`,
     };
 
-    const siteContext = siteType ? `\nTipe website: ${siteType}` : "";
-    const pageContext = req.query.pageType ? `\nTipe halaman: ${req.query.pageType}` : "";
-    const searchCtx  = req.query.searchQuery ? `\nQuery pencarian: "${req.query.searchQuery}"` : "";
+    const siteContext  = siteType ? `\nTipe website: ${siteType}` : "";
+    const pageContext  = req.query.pageType ? `\nTipe halaman: ${req.query.pageType}` : "";
+    const searchCtx   = req.query.searchQuery ? `\nQuery pencarian: "${req.query.searchQuery}"` : "";
 
-    // Parse deep DOM data dari selectors param
+    // ── Fetch HTML aktual untuk dikirim ke AI ─────────────────
+    log(" Mengambil HTML halaman untuk konteks AI...");
+    let htmlSnippet  = "";
+    let fetchedHtml  = "";
+    try {
+      const fetchRes = await fetchWithBypass(url, () => {});
+      if (fetchRes.html) {
+        fetchedHtml = fetchRes.html;
+        log(` HTML berhasil diambil (layer ${fetchRes.layer})`);
+      }
+    } catch {}
+
+    // ── Parse deep DOM dari HTML yang di-fetch ────────────────
     let domDataContext = "";
-    let bestSelector = "";
-    let foundFields = [];
+    let bestSelector   = "";
+    let foundFields    = [];
+    let itemTypeInfo   = "";
+
+    // 1. Coba dari selectors param (dari scan sebelumnya — paling akurat)
     if (selectors) {
       try {
         const parsed = JSON.parse(selectors);
         if (Array.isArray(parsed) && parsed.length) {
-          const best = parsed[0]; // sudah diurutkan by priority
+          const best   = parsed.find(p => p.source === "microdata") || parsed[0];
           bestSelector = best.selector || "";
-          foundFields  = best.fields || [];
-          const fieldStr = foundFields.slice(0, 8).map(f => `  - ${f.name}: "${f.value?.substring(0, 60) || ""}"`).join("\n");
-          domDataContext = `
-=== DATA NYATA DARI HTML (DEEP DOM ANALYSIS) ===
-Selector card utama: ${bestSelector}
-Jumlah item ditemukan: ${best.count || "?"}
-Field yang ditemukan di setiap card:
-${fieldStr || "  (tidak ada)"}
-${parsed.slice(1, 4).map(g => `\nGrup lain: selector="${g.selector}" count=${g.count} fields=${(g.rawFields||[]).join(",")}`).join("")}`;
+          foundFields  = best.fields   || [];
+          itemTypeInfo = best.itemType || "";
+          const fieldStr = foundFields.slice(0, 10)
+            .map(f => `  - ${f.name} (${f.source || "dom"}): "${(f.value || "").substring(0, 80)}"`)
+            .join("\n");
+          domDataContext = `\n=== DATA NYATA DARI DOM SCAN ===
+Selector utama: ${bestSelector}
+Item type: ${itemTypeInfo || "(DOM group)"}
+Jumlah item: ${best.count || "?"}
+Field per item:
+${fieldStr || "  (ambil title, link, image)"}
+${parsed.slice(0, 5).map(g => `\nElemen lain: cat="${g.category}" sel="${g.selector}" count=${g.count} src=${g.source}`).join("")}`;
+        }
+      } catch {}
+    }
+
+    // 2. Jika ada HTML, buat snippet microdata/card yang akurat untuk AI
+    if (fetchedHtml) {
+      try {
+        const $p = cheerio.load(fetchedHtml);
+
+        // Ambil satu contoh card nyata dari HTML
+        let sampleCardHtml = "";
+
+        // Prioritas 1: microdata article
+        const microdataEl = $p("[itemscope]").not("[itemscope] [itemscope]").first();
+        if (microdataEl.length) {
+          // Bersihkan: hapus script/style, potong panjang
+          const clone = microdataEl.clone();
+          clone.find("script, style, noscript").remove();
+          sampleCardHtml = clone.html()?.replace(/\s{2,}/g, " ").substring(0, 1500) || "";
+          if (!bestSelector) bestSelector = makeSelector(microdataEl[0], $p);
+        }
+
+        // Prioritas 2: artikel pertama jika tidak ada microdata
+        if (!sampleCardHtml) {
+          const articleEl = $p("article, li[class]").first();
+          if (articleEl.length) {
+            const clone = articleEl.clone();
+            clone.find("script, style").remove();
+            sampleCardHtml = clone.html()?.replace(/\s{2,}/g, " ").substring(0, 1500) || "";
+            if (!bestSelector) bestSelector = makeSelector(articleEl[0], $p);
+          }
+        }
+
+        if (sampleCardHtml) {
+          htmlSnippet = sampleCardHtml;
+          if (!domDataContext) {
+            domDataContext = `\n=== SAMPLE HTML CARD NYATA ===
+Selector: ${bestSelector}
+HTML sample (1 item):
+${sampleCardHtml.substring(0, 1200)}`;
+          } else {
+            domDataContext += `\n\nSample HTML card nyata (1 item dari ${bestSelector}):
+${sampleCardHtml.substring(0, 800)}`;
+          }
         }
       } catch {}
     }
 
     const siteSpecificGuide = {
-      streaming: `\nPanduan site streaming:
-- Gunakan selector card: ${bestSelector || "li, article, .item"} untuk loop setiap film
-- Field per card: title (teks heading), image (img src/data-src), link (href), rating (teks angka), year (4 digit)
-- Untuk poster: coba semua atribut img: src, data-src, data-lazy, data-original
-- Untuk episode: ikuti link detail, cari list episode
-- Handle pagination: cari a[rel=next] atau link "Next/Selanjutnya"
-- Untuk embed player: cari iframe src, atau script dengan URL video`,
-      ecommerce: `\nPanduan site ecommerce:
-- Gunakan selector: ${bestSelector || "li, .item, article"} untuk loop setiap produk
-- Field per produk: nama (heading), harga (teks rupiah/angka), rating, gambar (img src)
-- Handle harga: hapus "Rp", ".", "," lalu parse ke float
-- Ikuti pagination untuk halaman berikutnya`,
-      news: `\nPanduan site berita:
-- Gunakan selector: ${bestSelector || "article, .item"} untuk loop artikel
-- Field: judul, tanggal/time, penulis, thumbnail, link
-- Untuk isi lengkap: buka tiap link, ambil paragraf dari article/content`,
+      streaming: `\nPanduan scraping streaming:
+- Loop tiap card dengan selector: "${bestSelector || "article[itemscope], li"}"
+- Per card ambil: title (h3 atau itemprop=name), link (a[href] atau itemprop=url), image (img src/data-src atau itemprop=image), rating (itemprop=ratingValue), year (itemprop=datePublished), quality, episode count
+- Handle lazy-load images: coba src, data-src, data-lazy, data-original, data-thumbnail_url
+- Pagination: ikuti a[rel=next] atau link "Next/Page 2"`,
+      ecommerce: `\nPanduan scraping ecommerce:
+- Loop tiap card: "${bestSelector || "li, article"}"
+- Per card: nama (heading), harga (span harga/price), rating, gambar (img src/data-src), link
+- Handle harga: hapus "Rp ", ".", ",", parse ke number`,
+      news: `\nPanduan scraping news:
+- Loop tiap artikel: "${bestSelector || "article, .item"}"
+- Per artikel: judul, tanggal (time[datetime] atau meta), penulis, thumbnail, link`,
     };
 
     const prompt = `URL Target: ${url}
-Yang akan di-scrape: ${target}
+Target data: ${target}
 Bahasa: ${lang}${siteContext}${pageContext}${searchCtx}
-${bCF ? "Mode Bypass Cloudflare: AKTIF — wajib gunakan semua teknik stealth bypass" : ""}
+${bCF ? "Bypass mode: AKTIF (Cloudflare/WAF detected)" : ""}
 ${domDataContext}
-${(siteSpecificGuide[siteType] || "")}
+${siteSpecificGuide[siteType] || ""}
 
-Tugas: Buat scraper PRODUCTION-READY untuk mengambil: ${target}
+TUGAS: Buat scraper PRODUCTION-READY yang langsung bisa dijalankan.
 
-Struktur wajib:
-1. Import/require semua library
-2. Konfigurasi: BASE_URL="${url}", headers lengkap seperti browser (User-Agent Chrome, Accept, dll)
-3. Fungsi fetchPage(url) — HTTP GET dengan retry 3x, random delay 1-2s, return HTML string
-4. Fungsi parseItems(html) — gunakan selector "${bestSelector || "li, article"}" untuk loop tiap card, extract field: ${foundFields.slice(0,5).map(f=>f.name).join(", ") || "title, link, image, rating"}
-5. Fungsi main():
-   - Loop semua halaman (ikuti pagination)
-   - Kumpulkan semua data ke array
-   - Return JSON array
-6. console.log(JSON.stringify(result, null, 2))
-7. Try/catch + error handling lengkap
+Gunakan data nyata di atas untuk membuat selector yang tepat.
 
-PENTING:
-- GUNAKAN selector nyata dari data di atas, bukan asumsi
-- Tulis SEMUA kode lengkap, jangan potong
-- Kode langsung bisa dijalankan tanpa modifikasi apapun`;
+Struktur WAJIB:
+1. require/import semua library
+2. BASE_URL = "${url}"
+3. HEADERS = { "User-Agent": "Mozilla/5.0 Chrome/131...", Accept, Accept-Language, dll }
+4. async function fetchPage(url) — axios.get dengan retry 3x, delay random 800-2000ms
+5. function parseItems(html):
+   - const $ = cheerio.load(html)
+   - Loop dengan: $("${bestSelector || "article[itemscope], li"}").each(...)
+   - Per item ekstrak SEMUA field dari DOM sample di atas: ${foundFields.slice(0,6).map(f=>f.name).join(", ") || "title, link, image, rating, year"}
+   - Handle img lazy-load: try src, data-src, data-lazy, data-original
+   - Return array of objects
+6. async function main():
+   - Loop halaman 1..N (ikuti a[rel=next] untuk pagination)
+   - Collect semua items
+   - console.log(JSON.stringify(items, null, 2))
+7. main().catch(console.error)
+
+ATURAN:
+- Tulis SEMUA kode lengkap, JANGAN potong dengan "// ..." atau placeholder
+- Selector HARUS berdasarkan HTML nyata di atas, bukan asumsi
+- Kode harus bisa langsung dijalankan: node scraper.js`;
 
     const code = await (async () => {
       const raw = await callAI({ provider, apiKey, model, system: sysMap[lang], prompt, maxTokens: null });
