@@ -519,13 +519,30 @@ function buildTrySchema(url, target, generatedCode) {
     if (host.includes(domain)) return schema;
   }
 
-  // ── 3. Generic default schema ─────────────────────────────
-  return [
-    { name: "mode",   label: "Mode",                     type: "text",   placeholder: "list",  required: true },
-    { name: "query",  label: "Kata Pencarian (search)",   type: "text",   placeholder: "keyword...", required: false },
-    { name: "url",    label: "URL Item (detail)",          type: "url",    placeholder: "https://...", required: false },
-    { name: "limit",  label: "Limit hasil (opsional)",     type: "number", placeholder: "50",  required: false },
-  ];
+  // ── 3. Smart default schema — no forced mode params ────────
+  // Try to detect from URL itself what params make sense
+  try {
+    const pu  = new URL(url);
+    const pth = pu.pathname.toLowerCase();
+    const qp  = pu.searchParams;
+    const isSearch  = qp.has("q")||qp.has("query")||qp.has("search")||qp.has("s")||qp.has("keyword")||/\/search|\/cari/.test(pth);
+    const isDetail  = /\/\d{4,}|\/detail\/|\/item\/|\/post\/|\/artikel\/|\/film\/|\/movie\/|\/watch\/|\/video\//.test(pth);
+    const isSPA     = pth === "/" || pth === "";
+    if (isSearch) return [
+      { name: "q",     label: "Keyword Pencarian", type: "text",   placeholder: "masukkan keyword...", required: true },
+      { name: "limit", label: "Limit (opsional)",  type: "number", placeholder: "50", required: false },
+    ];
+    if (isDetail || isSPA) return [
+      { name: "url", label: "URL Target (opsional)", type: "url", placeholder: url, required: false },
+    ];
+    // List page
+    return [
+      { name: "limit", label: "Limit hasil (opsional)", type: "number", placeholder: "100", required: false },
+      { name: "page",  label: "Mulai dari halaman",     type: "number", placeholder: "1",   required: false },
+    ];
+  } catch {
+    return [{ name: "url", label: "URL Target", type: "url", placeholder: url, required: false }];
+  }
 }
 
 // ── Helper: Generate Requirements File ───────────────────────
@@ -1912,123 +1929,83 @@ app.post("/api/preview-html", async (req, res) => {
 
   let fetchResult;
   try { fetchResult = await fetchWithBypass(url, () => {}); }
-  catch (e) { return res.status(500).json({ error: `Fetch gagal: ${e.message}` }); }
+  catch (err) { return res.status(500).json({ error: `Fetch gagal: ${err.message}` }); }
   if (!fetchResult?.html) {
-    return res.status(500).json({ error: fetchResult?.error || "HTML tidak bisa diambil dari URL tersebut." });
+    return res.status(500).json({ error: fetchResult?.error || "HTML tidak bisa diambil." });
   }
 
   let html = fetchResult.html;
 
-  // ── 1. Pastikan ada <base href> untuk load resource relatif ──
+  // 1. Base tag
   if (!html.includes("<base")) {
     html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${url}">`);
     if (!html.includes("<base")) html = `<html><head><base href="${url}"></head><body>${html}</body></html>`;
   }
-
-  // ── 2. Hapus SEMUA script (termasuk yang buat overlay/popup) ──
+  // 2. Strip scripts
   html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
   html = html.replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "");
-  // Hapus iframe nested (cegah redirect)
   html = html.replace(/<iframe[^>]*src[^>]*>[\s\S]*?<\/iframe>/gi, "");
 
-  // ── 3. Picker script dengan OVERLAY TRICK ────────────────────
-  // Transparent div menutupi seluruh halaman di z-index tertinggi.
-  // pointer-events dimatikan sementara → elementFromPoint menembus
-  // semua overlay/modal/z-index dari website asli.
-  const PICKER = `
-<style id="__sai_reset">
-/* Force semua elemen visible & interactable */
+  // 3. Neutralizer: strip href + disable nav
+  const NEUTRALIZER = `<script id="__sai_n">(function(){
+function run(){
+  document.querySelectorAll('a').forEach(function(a){var h=a.getAttribute('href');if(h&&h!=='#'&&!h.startsWith('javascript:')){a.setAttribute('data-href',h);a.removeAttribute('href');}a.style.cursor='crosshair';});
+  document.querySelectorAll('form').forEach(function(f){f.addEventListener('submit',function(e){e.preventDefault();},true);});
+  document.querySelectorAll('[onclick]').forEach(function(el){el.setAttribute('data-oc',el.getAttribute('onclick'));el.removeAttribute('onclick');});
+}
+try{window.location.assign=function(){};}catch(e){}
+try{window.location.replace=function(){};}catch(e){}
+window.open=function(){return null;};
+if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',run);}else{run();}
+new MutationObserver(function(mm){mm.forEach(function(m){m.addedNodes.forEach(function(n){if(n.nodeType!==1)return;(n.tagName==='A'?[n]:Array.from(n.querySelectorAll('a'))).forEach(function(a){var h=a.getAttribute('href');if(h&&h!=='#'&&!h.startsWith('javascript:')){a.setAttribute('data-href',h);a.removeAttribute('href');}a.style.cursor='crosshair';});});});}).observe(document.documentElement,{childList:true,subtree:true});
+})();</script>`;
+  if (html.includes("</head>")) html = html.replace(/<\/head>/i, NEUTRALIZER + "\n</head>");
+  else html = NEUTRALIZER + "\n" + html;
+
+  // 4. Picker overlay
+  const PICKER = `<style id="__sai_reset">
 html,body{overflow:auto!important;position:relative!important}
-body{padding-bottom:52px!important}
-[id*="overlay"i],[id*="modal"i],[id*="popup"i],[id*="cookie"i],[id*="gdpr"i],[id*="consent"i],[id*="lightbox"i],[id*="backdrop"i],[id*="blocker"i],[id*="age-gate"i],
-[class*="overlay"i]:not(.__sai_selected):not(.__sai_hover),[class*="modal-backdrop"i],[class*="cookie-banner"i],[class*="cookie-consent"i],[class*="gdpr-banner"i],[class*="consent-banner"i],[class*="popup-overlay"i],[class*="age-gate"i],[class*="paywall"i]{display:none!important;pointer-events:none!important}
+[id*="overlay"i]:not([id^="__sai"]),[class*="modal-backdrop"i],[class*="cookie-banner"i],[class*="paywall"i],[id*="modal"i]:not([id^="__sai"]){display:none!important;pointer-events:none!important}
+body *:not([id^="__sai"]):not([class^="__sai"]){cursor:crosshair!important}
 </style>
 <style id="__sai_ui">
-.__sai_hover{outline:3px solid #00c2ff!important;outline-offset:2px!important;background-color:rgba(0,194,255,.06)!important}
-.__sai_selected{outline:3px solid #2effa8!important;outline-offset:2px!important;background-color:rgba(46,255,168,.09)!important}
-#__sai_overlay{position:fixed;inset:0;z-index:2147483645;cursor:crosshair}
-#__sai_badge{position:fixed;top:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.95);color:#2effa8;border:1px solid rgba(46,255,168,.5);padding:5px 16px;border-radius:8px;font:12px/1.5 monospace;z-index:2147483647;pointer-events:none;white-space:nowrap;display:none;max-width:92vw;overflow:hidden;text-overflow:ellipsis;box-shadow:0 4px 24px rgba(0,0,0,.7)}
-#__sai_bar{position:fixed;bottom:0;left:0;right:0;z-index:2147483647;background:rgba(6,7,11,.98);border-top:1px solid rgba(46,255,168,.35);padding:8px 18px;display:flex;align-items:center;gap:12px;font:11px monospace;color:#606880;pointer-events:all;box-shadow:0 -4px 20px rgba(0,0,0,.5)}
-.sai-logo{color:#2effa8;font-weight:700;font-size:12px}
-.sai-cnt-wrap{display:flex;align-items:center;gap:6px;padding:4px 12px;background:rgba(46,255,168,.07);border:1px solid rgba(46,255,168,.2);border-radius:20px}
-.sai-cnt{color:#2effa8;font-weight:700;font-size:14px}
-.sai-hint{margin-left:auto;font-size:10px;opacity:.4}
-#__sai_bar button{padding:5px 16px;border-radius:6px;cursor:pointer;font:700 11px monospace;border:none;pointer-events:all}
-.btn-done{background:#2effa8;color:#000}
-.btn-clear{background:rgba(255,69,96,.1);color:#ff4560;border:1px solid rgba(255,69,96,.3)!important}
+.__sai_h{outline:3px solid #00c2ff!important;outline-offset:2px!important;background:rgba(0,194,255,.06)!important}
+.__sai_s{outline:3px solid #2effa8!important;outline-offset:2px!important;background:rgba(46,255,168,.1)!important}
+#__sai_ov{position:fixed;inset:0;z-index:2147483645;cursor:crosshair;background:transparent}
+#__sai_badge{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.96);color:#2effa8;border:1px solid rgba(46,255,168,.5);padding:5px 18px;border-radius:20px;font:700 12px/1.5 monospace;z-index:2147483647;pointer-events:none;white-space:nowrap;display:none;max-width:94vw;overflow:hidden;text-overflow:ellipsis;box-shadow:0 4px 24px rgba(0,0,0,.8)}
 </style>
-<div id="__sai_badge"></div>
-<div id="__sai_bar" data-sai-toolbar="1">
-  <span class="sai-logo">SAI Picker</span>
-  <div class="sai-cnt-wrap"><span style="font-size:10px;opacity:.6">Dipilih</span><span id="__sai_cnt" class="sai-cnt">0</span></div>
-  <button class="btn-done" type="button" onclick="window.__sai_done()">&#10003; Selesai</button>
-  <button class="btn-clear" type="button" onclick="window.__sai_clear()">Clear</button>
-  <span class="sai-hint">Hover = highlight &nbsp;&#183;&nbsp; Klik = pilih / batalkan</span>
-</div>
-<div id="__sai_overlay"></div>
-<script>
-(function(){
+<div id="__sai_badge"></div><div id="__sai_ov"></div>
+<script id="__sai_p">(function(){
 'use strict';
-var selected=[],hoveredEl=null;
+var sel_list=[],hov=null;
 var SKIP={html:1,body:1,head:1,script:1,style:1,noscript:1,meta:1,link:1,br:1,hr:1};
-
-function isSAI(el){
-  var cur=el;
-  while(cur){
-    var id=cur.id||'';
-    if(id==='__sai_bar'||id==='__sai_badge'||id==='__sai_overlay')return true;
-    if(cur.getAttribute&&cur.getAttribute('data-sai-toolbar'))return true;
-    cur=cur.parentElement;
-  }
-  return false;
-}
-
-function baseSel(el){
+function isSAI(el){var c=el;while(c){if((c.id||'').startsWith('__sai_'))return true;c=c.parentElement;}return false;}
+function bSel(el){
   if(!el||el.nodeType!==1)return null;
-  var tag=(el.tagName||'div').toLowerCase();
-  if(SKIP[tag])return null;
+  var tag=(el.tagName||'div').toLowerCase();if(SKIP[tag])return null;
   if(el.id&&!/^[0-9]/.test(el.id)&&document.querySelectorAll('#'+el.id).length===1)return '#'+el.id;
-  var ip=el.getAttribute&&el.getAttribute('itemprop');
-  if(ip)return tag+'[itemprop="'+ip+'"]';
-  var cls=Array.from(el.classList||[]).filter(function(c){
-    return c.length>2&&c.length<40&&!/^[0-9a-f]{6,}$/.test(c)&&!/^(active|open|show|hide|js-|is-|has-)/.test(c);
-  }).sort(function(a,b){return b.length-a.length;});
+  var ip=el.getAttribute&&el.getAttribute('itemprop');if(ip)return tag+'[itemprop="'+ip+'"]';
+  var cls=Array.from(el.classList||[]).filter(function(c){return c.length>2&&c.length<40&&!/^[0-9a-f]{6,}$/.test(c)&&!/^(active|open|show|hide|js-|is-|has-|__sai)/.test(c);}).sort(function(a,b){return b.length-a.length;});
   if(cls.length)return tag+'.'+cls.slice(0,2).join('.');
   if(el.getAttribute&&el.getAttribute('itemtype'))return tag+'[itemscope]';
   return tag;
 }
-
-function ctxSel(el){
-  var sel=baseSel(el);
-  if(!sel)return null;
-  var n=0;try{n=document.querySelectorAll(sel).length;}catch(e){return sel;}
-  if(n<=3)return sel;
+function cSel(el){
+  var s=bSel(el);if(!s)return null;
+  var n=0;try{n=document.querySelectorAll(s).length;}catch(e){return s;}
+  if(n<=3)return s;
   var p=el.parentElement,d=0;
-  while(p&&d<7){
-    var pt=(p.tagName||'').toLowerCase();
-    if(SKIP[pt]||pt==='body'||pt==='main')break;
-    var ps=baseSel(p);
-    if(ps&&ps!==pt){
-      var sc=0;try{sc=p.querySelectorAll(sel).length;}catch(e){}
-      if(sc>0&&sc<n*0.65){
-        var combo=ps+' '+sel;
-        try{var vc=document.querySelectorAll(combo).length;if(vc>0&&vc<=sc)return combo;}catch(e){}
-      }
-    }
-    p=p.parentElement;d++;
-  }
-  return sel;
+  while(p&&d<7){var pt=(p.tagName||'').toLowerCase();if(SKIP[pt]||pt==='body')break;var ps=bSel(p);if(ps&&ps!==pt){var sc=0;try{sc=p.querySelectorAll(s).length;}catch(e){}if(sc>0&&sc<n*0.65){var c2=ps+' '+s;try{var vc=document.querySelectorAll(c2).length;if(vc>0&&vc<=sc)return c2;}catch(e){}}}p=p.parentElement;d++;}
+  return s;
 }
-
-function extractFields(el){
+function exF(el){
   var f=[],seen={};
   function add(n,v,s){if(!n||!v||seen[n])return;var vs=String(v).trim();if(!vs||vs.length>300)return;seen[n]=1;f.push({name:n,value:vs.substring(0,200),source:s});}
   Array.from(el.querySelectorAll('[itemprop]')).forEach(function(c){var p=c.getAttribute('itemprop');var v=c.textContent.trim()||c.getAttribute('src')||c.getAttribute('href')||c.getAttribute('content')||'';if(p&&v)add(p,v,'microdata');});
   var h=el.querySelector('h1,h2,h3,h4,h5');if(h&&h.textContent.trim())add('title',h.textContent.trim(),'dom');
-  var a=el.querySelector('a[href]');if(a)add('link',a.href||a.getAttribute('href')||'','dom');
-  var img=el.querySelector('img');
-  if(img){var src=img.getAttribute('data-src')||img.getAttribute('data-lazy')||img.getAttribute('data-original')||img.getAttribute('data-lazy-src')||img.src||'';if(src&&src.indexOf('data:')<0&&src.length>4)add('image',src,'dom');}
-  Array.from(el.attributes||[]).forEach(function(attr){if(!attr.name.startsWith('data-'))return;var v=attr.value;if(!v||v.length>300)return;var n=attr.name.replace('data-','').replace(/-/g,'_');if(['id','v','key','index','aos','wow'].includes(n))return;add(n,v,'data-attr');});
+  var a=el.querySelector('a[data-href]')||el.querySelector('a');if(a){var lk=a.getAttribute('data-href')||a.getAttribute('href')||'';if(lk)add('link',lk,'dom');}
+  var img=el.querySelector('img');if(img){var src=img.getAttribute('data-src')||img.getAttribute('data-lazy')||img.getAttribute('data-original')||img.getAttribute('data-lazy-src')||img.src||'';if(src&&src.indexOf('data:')<0&&src.length>4)add('image',src,'dom');}
+  Array.from(el.attributes||[]).forEach(function(attr){if(!attr.name.startsWith('data-')||['data-href','data-oc'].indexOf(attr.name)>=0)return;var v=attr.value;if(!v||v.length>300)return;var n=attr.name.replace('data-','').replace(/-/g,'_');add(n,v,'data-attr');});
   Array.from(el.querySelectorAll('span,strong,em,small,p')).forEach(function(sp){var t=sp.textContent.trim();if(!t||t.length>80)return;
     if(!seen.rating&&/^\d[.,]\d$/.test(t))add('rating',t,'pattern');
     if(!seen.year&&/^(19|20)\d{2}$/.test(t))add('year',t,'pattern');
@@ -2038,84 +2015,46 @@ function extractFields(el){
   if(!seen.title&&!seen.text){var tx=el.textContent.trim().replace(/\s+/g,' ').substring(0,100);if(tx)add('text',tx,'dom');}
   return f;
 }
-
 function getIT(el){var it=el.getAttribute&&el.getAttribute('itemtype');return it?it.split('/').pop():'';}
-
-function updateBadge(sel,cnt,it){
-  var b=document.getElementById('__sai_badge');
-  if(!b)return;
-  b.style.display='block';
-  b.textContent=(it?'['+it+'] ':'')+sel+' \u2014 '+cnt+' item';
+function badge(s,n,it){var b=document.getElementById('__sai_badge');if(!b)return;b.style.display='block';b.textContent=(it?'['+it+'] ':'')+s+' — '+n+' item';}
+function doSel(el){
+  var s=cSel(el);if(!s)return;
+  var fields=exF(el),it=getIT(el);
+  var all=[];try{all=Array.from(document.querySelectorAll(s));}catch(e){}
+  var idx=sel_list.findIndex(function(x){return x.selector===s;});
+  if(idx>=0){sel_list.splice(idx,1);all.forEach(function(x){x.classList.remove('__sai_s','__sai_h');});}
+  else{sel_list.push({id:'v_'+Date.now()+'_'+Math.random().toString(36).slice(2),source:it?'microdata':'visual',category:it?it.toLowerCase():(el.tagName||'div').toLowerCase(),label:(it?'['+it+'] ':'')+s+' ('+all.length+'x)',selector:s,itemType:it||null,fields:fields,rawFields:fields.map(function(f){return f.name;}),preview:fields.slice(0,5).map(function(f){return f.name+': '+f.value.substring(0,60);}),count:all.length,target:s+' ('+all.length+'x): '+fields.map(function(f){return f.name;}).join(', '),priority:it?20:15});all.forEach(function(x){x.classList.add('__sai_s');});}
+  try{window.parent.postMessage({type:'__sai_selection',items:sel_list},'*');}catch(e){}
 }
-
-function doHover(el){
-  if(hoveredEl&&hoveredEl!==el)hoveredEl.classList.remove('__sai_hover');
-  hoveredEl=el;
-  el.classList.add('__sai_hover');
-}
-
-function doSelect(el){
-  var sel=ctxSel(el);if(!sel)return;
-  var fields=extractFields(el);
-  var it=getIT(el);
-  var all=[];try{all=Array.from(document.querySelectorAll(sel));}catch(e){}
-  var cnt=all.length;
-  var idx=selected.findIndex(function(s){return s.selector===sel;});
-  if(idx>=0){
-    selected.splice(idx,1);
-    all.forEach(function(x){x.classList.remove('__sai_selected','__sai_hover');});
-  } else {
-    selected.push({id:'v_'+Date.now()+'_'+Math.random().toString(36).slice(2),source:it?'microdata':'visual',category:it?it.toLowerCase():(el.tagName||'div').toLowerCase(),label:(it?'['+it+'] ':'')+sel+' ('+cnt+'x)',selector:sel,itemType:it||null,fields:fields,rawFields:fields.map(function(f){return f.name;}),preview:fields.slice(0,5).map(function(f){return f.name+': '+f.value.substring(0,60);}),count:cnt,target:sel+' ('+cnt+'x): '+fields.map(function(f){return f.name;}).join(', '),priority:it?20:15});
-    all.forEach(function(x){x.classList.add('__sai_selected');});
-  }
-  document.getElementById('__sai_cnt').textContent=selected.length;
-  try{window.parent.postMessage({type:'__sai_selection',items:selected},'*');}catch(e){}
-}
-
-/* ═══ OVERLAY TRICK ════════════════════════════════════════
-   Transparent div di z-index tertinggi menangkap semua event.
-   Untuk detect elemen: matikan pointer-events overlay sebentar
-   → elementFromPoint → nyalakan lagi.
-   MENEMBUS semua overlay/modal/z-index dari website asli.
-   ════════════════════════════════════════════════════════ */
-var ov=document.getElementById('__sai_overlay');
-
+var ov=document.getElementById('__sai_ov');
 ov.addEventListener('mousemove',function(e){
-  ov.style.pointerEvents='none';
-  var el=document.elementFromPoint(e.clientX,e.clientY);
-  ov.style.pointerEvents='';
-  if(!el||isSAI(el)||SKIP[(el.tagName||'').toLowerCase()])return;
-  doHover(el);
-  var sel=ctxSel(el);
-  if(sel){var n=0;try{n=document.querySelectorAll(sel).length;}catch(e){}updateBadge(sel,n,getIT(el));}
+  ov.style.pointerEvents='none';var el=document.elementFromPoint(e.clientX,e.clientY);ov.style.pointerEvents='';
+  if(!el||isSAI(el)||SKIP[(el.tagName||'').toLowerCase()]){if(hov){hov.classList.remove('__sai_h');hov=null;}return;}
+  if(hov&&hov!==el)hov.classList.remove('__sai_h');
+  hov=el;el.classList.add('__sai_h');
+  var s=cSel(el);if(s){var n=0;try{n=document.querySelectorAll(s).length;}catch(ex){}badge(s,n,getIT(el));}
 });
-
-ov.addEventListener('mouseleave',function(){
-  if(hoveredEl){hoveredEl.classList.remove('__sai_hover');hoveredEl=null;}
-  var b=document.getElementById('__sai_badge');if(b)b.style.display='none';
-});
-
+ov.addEventListener('mouseleave',function(){if(hov){hov.classList.remove('__sai_h');hov=null;}var b=document.getElementById('__sai_badge');if(b)b.style.display='none';});
 ov.addEventListener('click',function(e){
-  e.preventDefault();e.stopPropagation();
-  ov.style.pointerEvents='none';
-  var el=document.elementFromPoint(e.clientX,e.clientY);
-  ov.style.pointerEvents='';
-  if(!el||isSAI(el)||SKIP[(el.tagName||'').toLowerCase()])return;
-  doSelect(el);
-});
-
-window.__sai_done=function(){try{window.parent.postMessage({type:'__sai_done',items:selected},'*');}catch(e){}};
-window.__sai_clear=function(){document.querySelectorAll('.__sai_selected,.__sai_hover').forEach(function(el){el.classList.remove('__sai_selected','__sai_hover');});selected=[];hoveredEl=null;document.getElementById('__sai_cnt').textContent='0';try{window.parent.postMessage({type:'__sai_selection',items:[]},'*');}catch(e){}};
-
+  e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();
+  if(!hov||isSAI(hov)||SKIP[(hov.tagName||'').toLowerCase()])return false;
+  doSel(hov);return false;
+},true);
+ov.addEventListener('mousedown',function(e){e.preventDefault();e.stopPropagation();return false;},true);
+ov.addEventListener('mouseup',function(e){e.preventDefault();e.stopPropagation();return false;},true);
+window.__sai_done=function(){try{window.parent.postMessage({type:'__sai_done',items:sel_list},'*');}catch(e){}};
+window.__sai_clear=function(){document.querySelectorAll('.__sai_s,.__sai_h').forEach(function(el){el.classList.remove('__sai_s','__sai_h');});sel_list=[];hov=null;try{window.parent.postMessage({type:'__sai_selection',items:[]},'*');}catch(e){}};
+window.__sai_getSelected=function(){return sel_list;};
+window.__sai_getSnapshot=function(){try{var b=document.body.cloneNode(true);b.querySelectorAll('[id^="__sai"]').forEach(function(x){x.remove();});return b.innerHTML.substring(0,8000);}catch(e){return '';}};
 try{window.parent.postMessage({type:'__sai_ready'},'*');}catch(e){}
-})();
-</script>`;
+})();</script>`;
 
   if (html.includes("</body>")) html = html.replace(/<\/body>/i, PICKER + "\n</body>");
   else html += PICKER;
 
   res.json({ success: true, url, layer: fetchResult.layer, html });
 });
+
 
 // ── POST /api/url-detect ───────────────────────────────────────
 // Deteksi tipe halaman INSTAN dari URL tanpa fetch — pure URL pattern analysis
@@ -2949,38 +2888,75 @@ ${paginationInfo.totalPages ? `Total halaman: ${paginationInfo.totalPages}` : ""
       } catch {}
     }
 
-    const hasSearch = (target||"").toLowerCase().includes("cari") ||
-                      (target||"").toLowerCase().includes("search") ||
-                      (selectors||"").includes("search_form");
+    // ── Deteksi tipe halaman secara akurat dari URL ────────────
+    let PAGE_TYPE = "general";
+    let PAGE_TYPE_DESC = "";
+    try {
+      const pu  = new URL(url);
+      const pth = pu.pathname.toLowerCase();
+      const qp  = pu.searchParams;
+      const hasPageParam   = qp.has("page")||qp.has("p")||qp.has("hal")||qp.has("pg");
+      const hasSearchParam = qp.has("q")||qp.has("query")||qp.has("search")||qp.has("s")||qp.has("keyword");
+      const isSearchPath   = /\/search|\/cari|\/hasil/.test(pth);
+      const isDetailPath   = !hasSearchParam && !hasPageParam && !isSearchPath &&
+        /\/\d{4,}|\/detail\/|\/item\/|\/produk\/|\/product\/|\/post\/|\/artikel\/|\/film\/|\/movie\/|\/watch\/|\/video\/|\/read\/|\/berita\//.test(pth);
+      const isSPA          = pth === "/" || pth === "";
+      const isCategoryPath = hasPageParam || /\/(category|kategori|tag|genre|list|feed|archive|terbaru|popular|hot|results|page)\//.test(pth);
 
-    // Determine pagination strategy based on detected type
-    const pagStrategy = paginationInfo.found ? (
-      paginationInfo.type === "rel_next"       ? `ikuti a[rel="next"].href loop sampai tidak ada lagi` :
-      paginationInfo.type === "url_param"      ? `increment page parameter di URL (page=1,2,3,...) loop sampai halaman kosong` :
-      paginationInfo.type === "button_next"    ? `ambil URL dari tombol next ("${paginationInfo.selector}"), follow sampai tidak ada` :
-      paginationInfo.type === "infinite_scroll"? `gunakan parameter page/offset di request, loop sampai response kosong` :
-      `ikuti a[rel="next"] atau increment page parameter`
-    ) : `coba a[rel="next"] dulu, jika tidak ada increment ?page=N atau /page/N`;
+      if      (hasSearchParam || isSearchPath) { PAGE_TYPE = "search";   PAGE_TYPE_DESC = `HALAMAN PENCARIAN — query param: ${hasSearchParam?[...qp.keys()].find(k=>["q","query","search","s","keyword"].includes(k)):""}`; }
+      else if (isDetailPath)                   { PAGE_TYPE = "detail";   PAGE_TYPE_DESC = "HALAMAN DETAIL/SINGLE PAGE — 1 item, scrape langsung tanpa loop"; }
+      else if (isSPA)                          { PAGE_TYPE = "spa";      PAGE_TYPE_DESC = "SINGLE PAGE / HOMEPAGE — scrape konten utama halaman ini"; }
+      else if (isCategoryPath)                 { PAGE_TYPE = "list";     PAGE_TYPE_DESC = `HALAMAN LIST/KATEGORI — ada pagination, loop sampai habis${hasPageParam?` (param: ${[...qp.keys()].find(k=>["page","p","hal","pg"].includes(k))})`:""}`; }
+      else                                     { PAGE_TYPE = "general";  PAGE_TYPE_DESC = "HALAMAN UMUM — analisa HTML dan tentukan pola terbaik"; }
+    } catch {}
 
-    const prompt = `Website: ${url}${siteCtx}${pageCtx}${searchCtx}
-Target: ${target}
-${bCF ? "Website pakai proteksi — gunakan headers browser lengkap + retry 3x" : ""}
+    // ── Build endpoint contract berdasarkan tipe halaman ─────
+    const endpointContract = (() => {
+      if (PAGE_TYPE === "detail" || PAGE_TYPE === "spa") {
+        return `// TIPE: ${PAGE_TYPE_DESC}
+// Endpoint: GET /api/${routeName}
+//   → Langsung scrape URL ini, return semua data
+//   → OPTIONAL: ?url=<url_lain> untuk scrape URL berbeda tipe sama
+//   → TIDAK ADA mode=list/search — ini halaman tunggal
+// Response: { status, url, data: { field1, field2, ... } }`;
+      }
+      if (PAGE_TYPE === "list") {
+        return `// TIPE: ${PAGE_TYPE_DESC}
+// Endpoint: GET /api/${routeName}
+//   → Scrape SEMUA halaman list (auto-pagination)
+//   → OPTIONAL: ?limit=N untuk batasi hasil (default: unlimited)
+//   → OPTIONAL: ?page=N untuk mulai dari halaman tertentu
+// Response: { status, url, total, pages_scraped, results: [...] }`;
+      }
+      if (PAGE_TYPE === "search") {
+        return `// TIPE: ${PAGE_TYPE_DESC}
+// Endpoint: GET /api/${routeName}?q=<keyword>
+//   → Scrape hasil pencarian untuk keyword
+//   → OPTIONAL: ?limit=N untuk batasi hasil
+// Response: { status, url, query, total, results: [...] }`;
+      }
+      return `// TIPE: ${PAGE_TYPE_DESC}
+// Endpoint: GET /api/${routeName}
+//   → Scrape konten utama dari URL ini
+//   → OPTIONAL: ?url=<url_lain> untuk URL berbeda tipe sama
+// Response: { status, url, results: [...] }`;
+    })();
+
+    const prompt = `Website: ${url}
+Target data: ${target}
+${bCF ? "PROTEKSI AKTIF — gunakan headers browser lengkap + retry 3x" : ""}
+
+TIPE HALAMAN TERDETEKSI:
+${PAGE_TYPE_DESC}
+
 ${domContext}
 ${paginationContext}
 
-TUGAS UTAMA: Buat Express.js router sebagai API scraper UNLIMITED — scrape SEMUA halaman sekaligus.
+${endpointContract}
 
-KONSEP: Scraper ini harus "beranak" — 1 request API mengembalikan SEMUA hasil dari semua halaman.
-Jangan berhenti di halaman 1. Loop terus sampai tidak ada lagi data.
+TUGAS: Buat Express.js router file sesuai TIPE HALAMAN di atas.
 
-MODES:
-${hasSearch ? `- mode=list               → semua item halaman 1 s/d selesai (unlimited)
-- mode=search&query=xxx   → cari di semua halaman sampai habis (unlimited)
-- mode=detail&url=xxx     → detail 1 item spesifik` :
-`- mode=list               → SEMUA item dari semua halaman sekaligus (unlimited)
-- mode=detail&url=xxx     → detail lengkap 1 item`}
-
-STRUKTUR FILE (WAJIB PERSIS SEPERTI INI):
+STRUKTUR FILE WAJIB:
 
 const express = require('express');
 const axios   = require('axios');
@@ -2989,143 +2965,173 @@ const router  = express.Router();
 
 router.tags = ["${siteType||"scraper"}"];
 
-/**
- * Scraper API — ${url}
- * GET /api/${routeName}?mode=list
- * GET /api/${routeName}?mode=list&limit=50       (opsional, default unlimited)
- * GET /api/${routeName}?mode=search&query=judul
- * GET /api/${routeName}?mode=detail&url=https://...
- */
-
+const BASE_URL = '${url}';
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.5',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'DNT': '1',
-  'Connection': 'keep-alive',
-  'Upgrade-Insecure-Requests': '1',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8',
+  'DNT': '1', 'Connection': 'keep-alive',
 };
 
-// Fetch HTML dengan retry otomatis
-const fetchHtml = async (pageUrl) => {
-  for (let attempt = 0; attempt < 3; attempt++) {
+async function fetchHtml(pageUrl) {
+  for (let i = 0; i < 3; i++) {
     try {
       const { data } = await axios.get(pageUrl, { headers: HEADERS, timeout: 20000 });
       return data;
     } catch (err) {
-      if (attempt === 2) throw err;
-      await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+      if (i === 2) throw err;
+      await new Promise(r => setTimeout(r, 1200 * (i + 1)));
     }
   }
-};
+}
 
-// Parse items dari 1 halaman menggunakan selector: "${bestSel||"article[itemscope]"}"
-// Return { items: [...], nextPageUrl: string|null }
-const parsePage = (html, basePageUrl) => {
+${PAGE_TYPE === "detail" || PAGE_TYPE === "spa" ? `
+// Parse semua data dari halaman detail/single-page
+// Selector nyata: "${bestSel||"article, main, .content"}"
+// Field yang diambil: ${fieldList}
+function parseData(html, pageUrl) {
   const $ = cheerio.load(html);
-  const items = [];
-
-  $("${bestSel||"article[itemscope]"}").each((_, el) => {
-    // Ekstrak semua field: ${fieldList}
-    // Handle lazy-load img: data-src, data-lazy, data-original, data-thumbnail_url, src
-    items.push({ /* field per item */ });
-  });
-
-  // Deteksi next page URL: ${pagStrategy}
-  const nextPageUrl = /* logika next page */ null;
-
-  return { items, nextPageUrl };
-};
-
-// Fetch SEMUA halaman sampai habis — ini yang bikin "beranak"/unlimited
-const fetchAllPages = async (startUrl, limit = 0) => {
-  const allItems = [];
-  let   currentUrl = startUrl;
-  let   pageNum    = 1;
-
-  while (currentUrl) {
-    console.log('Scraping page', pageNum, '-', currentUrl);
-    const html = await fetchHtml(currentUrl);
-    const { items, nextPageUrl } = parsePage(html, currentUrl);
-
-    allItems.push(...items);
-
-    // Stop jika: tidak ada halaman berikutnya, atau limit tercapai
-    if (!nextPageUrl || nextPageUrl === currentUrl) break;
-    if (limit > 0 && allItems.length >= limit) break;
-    if (pageNum >= 50) break; // safety limit
-
-    currentUrl = nextPageUrl;
-    pageNum++;
-    await new Promise(r => setTimeout(r, 800)); // delay sopan
-  }
-
-  return allItems;
-};
-
-// Parse detail 1 item dari halaman detail
-const parseDetail = (html) => {
-  const $ = cheerio.load(html);
-  // Ekstrak semua info detail: title, description, image, rating, year, genre, cast, dll
-  return { /* detail fields */ };
-};
+  // TULIS EKSTRAKSI NYATA — gunakan selector yang terdeteksi
+  return { /* semua field */ };
+}
 
 router.get('/', async (req, res) => {
-  const { mode, query, url: itemUrl, limit } = req.query;
-  const maxItems = limit ? parseInt(limit, 10) : 0;
-
-  if (!mode) {
-    return res.status(400).json({
-      status: 'error',
-      message: 'Parameter mode diperlukan',
-      usage: 'mode=list | mode=search&query=xxx | mode=detail&url=xxx',
-    });
-  }
-
   try {
-    if (mode === 'list') {
-      const items = await fetchAllPages('${url}', maxItems);
-      return res.json({ status: 'success', total: items.length, page_scraped: 'all', results: items });
-
-    } else if (mode === 'search') {
-      if (!query) return res.status(400).json({ status: 'error', message: 'Parameter query diperlukan' });
-      const searchUrl = /* URL search */ '';
-      const items     = await fetchAllPages(searchUrl, maxItems);
-      return res.json({ status: 'success', query, total: items.length, results: items });
-
-    } else if (mode === 'detail') {
-      if (!itemUrl) return res.status(400).json({ status: 'error', message: 'Parameter url diperlukan' });
-      const html   = await fetchHtml(itemUrl);
-      const detail = parseDetail(html);
-      return res.json({ status: 'success', results: detail });
-
-    } else {
-      return res.status(400).json({ status: 'error', message: 'Mode tidak valid: gunakan list, search, atau detail' });
-    }
+    const targetUrl = req.query.url || BASE_URL;
+    const html = await fetchHtml(targetUrl);
+    const data = parseData(html, targetUrl);
+    return res.json({ status: 'success', url: targetUrl, data });
   } catch (err) {
     console.error('[${routeName}]', err.message);
     res.status(500).json({ status: 'error', message: err.message });
   }
-});
+});` : ""}
+
+${PAGE_TYPE === "list" ? `
+// Parse 1 halaman list → return {items, nextPageUrl}
+// Selector nyata: "${bestSel||"article, .item, li"}"
+// Field per item: ${fieldList}
+// Pagination: ${pagStrategy}
+function parsePage(html, pageUrl) {
+  const $ = cheerio.load(html);
+  const items = [];
+  $('${bestSel||"article"}').each((_, el) => {
+    // TULIS EKSTRAKSI NYATA
+    items.push({ /* fields */ });
+  });
+  const nextPageUrl = /* logic next page: ${pagStrategy} */ null;
+  return { items, nextPageUrl };
+}
+
+async function scrapeAll(startUrl, limit = 0) {
+  const all = [];
+  let cur = startUrl, page = 1;
+  while (cur) {
+    const html = await fetchHtml(cur);
+    const { items, nextPageUrl } = parsePage(html, cur);
+    all.push(...items);
+    if (!nextPageUrl || nextPageUrl === cur) break;
+    if (limit > 0 && all.length >= limit) break;
+    if (page >= 50) break;
+    cur = nextPageUrl;
+    page++;
+    await new Promise(r => setTimeout(r, 700));
+  }
+  return { items: all, pagesScraped: page };
+}
+
+router.get('/', async (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit) : 0;
+    const startPage = req.query.page ? parseInt(req.query.page) : 1;
+    const startUrl = startPage > 1 ? /* build URL halaman N */ BASE_URL : BASE_URL;
+    const { items, pagesScraped } = await scrapeAll(startUrl, limit);
+    return res.json({ status: 'success', url: BASE_URL, total: items.length, pages_scraped: pagesScraped, results: items });
+  } catch (err) {
+    console.error('[${routeName}]', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});` : ""}
+
+${PAGE_TYPE === "search" ? `
+// Build URL pencarian dari keyword
+function buildSearchUrl(query, page = 1) {
+  // TULIS URL SEARCH YANG BENAR untuk ${url}
+  return BASE_URL + '?q=' + encodeURIComponent(query) + (page > 1 ? '&page=' + page : '');
+}
+
+// Parse hasil pencarian dari 1 halaman
+function parseResults(html, pageUrl) {
+  const $ = cheerio.load(html);
+  const items = [];
+  $('${bestSel||"article, .result, .item"}').each((_, el) => {
+    // TULIS EKSTRAKSI NYATA — field: ${fieldList}
+    items.push({ /* fields */ });
+  });
+  const nextPageUrl = /* logic next */ null;
+  return { items, nextPageUrl };
+}
+
+router.get('/', async (req, res) => {
+  const query = req.query.q || req.query.query || '';
+  if (!query) return res.status(400).json({ status: 'error', message: 'Parameter q diperlukan' });
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit) : 0;
+    const all = []; let cur = buildSearchUrl(query), page = 1;
+    while (cur) {
+      const html = await fetchHtml(cur);
+      const { items, nextPageUrl } = parseResults(html, cur);
+      all.push(...items);
+      if (!nextPageUrl || nextPageUrl === cur || page >= 20) break;
+      if (limit > 0 && all.length >= limit) break;
+      cur = nextPageUrl; page++;
+      await new Promise(r => setTimeout(r, 700));
+    }
+    return res.json({ status: 'success', url: BASE_URL, query, total: all.length, results: all });
+  } catch (err) {
+    console.error('[${routeName}]', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});` : ""}
+
+${PAGE_TYPE === "general" ? `
+// Scrape konten dari URL yang diberikan
+function parseContent(html, pageUrl) {
+  const $ = cheerio.load(html);
+  const results = [];
+  $('${bestSel||"article, .item, li"}').each((_, el) => {
+    // TULIS EKSTRAKSI NYATA — field: ${fieldList}
+    results.push({ /* fields */ });
+  });
+  return results;
+}
+
+router.get('/', async (req, res) => {
+  try {
+    const targetUrl = req.query.url || BASE_URL;
+    const html = await fetchContent(targetUrl);
+    const results = parseContent(html, targetUrl);
+    return res.json({ status: 'success', url: targetUrl, total: results.length, results });
+  } catch (err) {
+    console.error('[${routeName}]', err.message);
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});` : ""}
 
 module.exports = router;
 
-ATURAN KODE — WAJIB DIIKUTI:
-1. Selector NYATA: "${bestSel||"article[itemscope]"}" untuk loop item
-2. Field NYATA per item: ${fieldList}
-   - Lazy-load img: COBA BERURUTAN → data-src, data-lazy, data-lazy-src, data-original, data-thumbnail_url, src
-   - itemprop: gunakan [itemprop="name"], [itemprop="url"], [itemprop="image"] dst jika ada
-3. Pagination: ${pagStrategy}
-   - parsePage() HARUS return nextPageUrl yang valid atau null
-   - fetchAllPages() loop sampai nextPageUrl null atau pageNum >= 50
-4. Search URL: buat URL search dari pola yang terdeteksi di domContext
-5. TULIS SEMUA KODE LENGKAP — TIDAK BOLEH ada "..." atau placeholder apapun
-6. Semua fungsi HARUS punya implementasi nyata yang bisa dijalankan langsung`;
+ATURAN WAJIB — TIDAK BOLEH DILANGGAR:
+1. ISI semua placeholder /* fields */ dan /* logic */ dengan kode NYATA
+2. Selector NYATA: "${bestSel||"article"}" — field NYATA: ${fieldList}
+3. Lazy-load img: coba data-src, data-lazy, data-original, src berurutan
+4. itemprop: [itemprop="name"], [itemprop="url"], [itemprop="image"] jika ada
+5. Pagination: ${pagStrategy}
+6. JANGAN buat mode=list/search/detail — endpoint sudah spesifik sesuai tipe
+7. TULIS KODE LENGKAP — tidak ada placeholder, tidak ada "// implementasi di sini"
+8. Semua fungsi harus executable langsung
+`;
 
-
-
-    const code = await (async () => {
+        const code = await (async () => {
       const raw = await callAI({ provider, apiKey, model, system: sysMap[lang], prompt, maxTokens: null });
       return raw.replace(/^```[\w]*\n?/gm, "").replace(/^```\n?/gm, "").trim();
     })();

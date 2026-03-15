@@ -123,10 +123,10 @@ export function TryOutputPanel({ scraper, compact = false }: Props) {
 
   const schema = scraper.trySchema || [];
   const modeField = schema.find(f => f.name === "mode");
-  const defaultMode = modeField?.placeholder?.split(" | ")?.[0]?.trim() || "list";
+  const defaultMode = modeField?.placeholder?.split(" | ")?.[0]?.trim() || "";
 
-  // Pre-fill mode when schema loads
-  if (modeField && !inputs["mode"]) {
+  // Pre-fill mode only if schema explicitly has mode field
+  if (modeField && !inputs["mode"] && defaultMode) {
     setTimeout(() => setInputs(p => ({ ...p, mode: defaultMode })), 0);
   }
 
@@ -173,11 +173,6 @@ export function TryOutputPanel({ scraper, compact = false }: Props) {
                     </div>
                   );
                 }
-
-                // Skip fields not relevant to current mode
-                const curMode = inputs["mode"] || defaultMode;
-                if (field.name === "query" && curMode === "detail") return null;
-                if ((field.name === "url" || field.name.endsWith("url") || field.name.endsWith("Url")) && curMode === "list") return null;
 
                 return (
                   <div key={field.name}>

@@ -1,27 +1,24 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  X, Eye, CheckSquare, AlertTriangle, Zap, RefreshCw,
-  Layers, MousePointer2, LayoutGrid, ChevronDown, ChevronUp,
-  Globe, Package, Search,
+  X, Eye, CheckSquare, Zap, RefreshCw, Layers, MousePointer2,
+  LayoutGrid, Globe, Search, Sparkles, Loader2, ShieldCheck,
+  AlertTriangle, ChevronDown, Package,
 } from "lucide-react";
 import { previewHtml, prefetchUrl } from "../api";
+import { useStore } from "../store";
 import type { PrefetchElement, PrefetchResult } from "../types";
 
 interface PickedElement {
-  id: string;
-  source: string;
-  category: string;
-  label: string;
-  selector: string;
-  itemType: string | null;
+  id: string; source: string; category: string; label: string;
+  selector: string; itemType: string | null;
   fields: { name: string; value: string; source: string }[];
-  rawFields: string[];
-  preview: string[];
-  count: number;
-  target: string;
-  priority: number;
+  rawFields: string[]; preview: string[]; count: number;
+  target: string; priority: number;
 }
-
+interface AiRec {
+  label: string; selector: string; target: string;
+  fields: string[]; reason: string; priority: number;
+}
 interface Props {
   url: string;
   onClose: () => void;
@@ -29,51 +26,44 @@ interface Props {
 }
 
 const SRC_CLR: Record<string, string> = {
-  microdata: "var(--neon)", visual: "var(--neon2)",
-  dom: "var(--neon3)", itemprop: "var(--neon)", class: "#a78bfa",
-};
-
-const CAT_ICON: Record<string, string> = {
-  movie:"🎬", tvseries:"📺", videoobject:"▶️", product:"🛍️",
-  article:"📰", newsarticle:"📰", blogposting:"📝", person:"👤",
-  organization:"🏢", review:"⭐", film_video:"🎬", produk:"🛍️",
-  media:"📺", artikel:"📰", card:"📦", field:"🔧",
-  search_form:"🔍", pagination:"📄", navigation:"🗂️",
-  structured:"🗄️", meta:"🏷️",
+  microdata:"var(--neon)", visual:"var(--neon2)",
+  dom:"var(--neon3)", itemprop:"var(--neon)", class:"#a78bfa",
 };
 
 type Mode = "iframe" | "cards";
 
 export function VisualPickerModal({ url, onClose, onApply }: Props) {
-  // ── State ──────────────────────────────────────────────────
-  const [mode,       setMode]       = useState<Mode>("iframe");
-  const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState("");
-  const [layer,      setLayer]      = useState(0);
-  const [ready,      setReady]      = useState(false);
-  const [picked,     setPicked]     = useState<PickedElement[]>([]);
+  const { provider, apiKey, model, addToast } = useStore();
 
-  // Card fallback state
-  const [scanning,      setScanning]      = useState(false);
-  const [scanResult,    setScanResult]    = useState<PrefetchResult | null>(null);
-  const [activeCategory,setActiveCategory]= useState<string | null>(null);
-  const [checkedCards,  setCheckedCards]  = useState<Record<string, boolean>>({});
-  const [cardSearch,    setCardSearch]    = useState("");
+  const [mode,    setMode]    = useState<Mode>("iframe");
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState("");
+  const [layer,   setLayer]   = useState(0);
+  const [ready,   setReady]   = useState(false);
+  const [picked,  setPicked]  = useState<PickedElement[]>([]);
+
+  const [scanning,       setScanning]       = useState(false);
+  const [scanResult,     setScanResult]     = useState<PrefetchResult | null>(null);
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [checkedCards,   setCheckedCards]   = useState<Record<string,boolean>>({});
+  const [cardSearch,     setCardSearch]     = useState("");
+
+  const [analyzing,   setAnalyzing]   = useState(false);
+  const [aiRecs,      setAiRecs]      = useState<AiRec[] | null>(null);
+  const [showAiPanel, setShowAiPanel] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // ── iframe message listener ─────────────────────────────────
+  // Parse URL for browser bar display
+  let parsedUrl = { origin: url, pathname: "/", hostname: url };
+  try { const u = new URL(url); parsedUrl = { origin: u.origin, pathname: u.pathname + u.search, hostname: u.hostname }; } catch {}
+
+  // ── iframe message listener ───────────────────────────────
   const handleMessage = useCallback((e: MessageEvent) => {
     if (!e.data?.type?.startsWith("__sai_")) return;
-    if (e.data.type === "__sai_ready") {
-      setReady(true);
-      setLoading(false);
-    } else if (e.data.type === "__sai_selection") {
-      setPicked(e.data.items || []);
-    } else if (e.data.type === "__sai_done") {
-      onApply(e.data.items || []);
-      onClose();
-    }
+    if (e.data.type === "__sai_ready") { setReady(true); setLoading(false); }
+    else if (e.data.type === "__sai_selection") setPicked(e.data.items || []);
+    else if (e.data.type === "__sai_done") { onApply(e.data.items || []); onClose(); }
   }, [onApply, onClose]);
 
   useEffect(() => {
@@ -81,114 +71,116 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
     return () => window.removeEventListener("message", handleMessage);
   }, [handleMessage]);
 
-  // ── Load iframe via previewHtml ─────────────────────────────
-  // previewHtml fetches HTML server-side (6-layer bypass) dan
-  // inject picker script dengan OVERLAY TRICK — menembus semua z-index.
+  // ── Load iframe ───────────────────────────────────────────
   const loadIframe = useCallback(async () => {
     if (!url) return;
-    setLoading(true);
-    setError("");
-    setReady(false);
-
+    setLoading(true); setError(""); setReady(false);
     try {
       const res = await previewHtml(url);
       if (!res.success || !res.html) {
-        setError("Tidak bisa mengambil halaman ini.");
-        setLoading(false);
-        return;
+        setError("Tidak bisa mengambil halaman ini. Gunakan mode Scan.");
+        setLoading(false); return;
       }
       setLayer(res.layer || 0);
       const iframe = iframeRef.current;
       if (iframe) {
         iframe.srcdoc = res.html;
-
-        // Fallback: jika __sai_ready tidak datang dalam 10s, anggap loaded
-        const fallback = setTimeout(() => {
-          setLoading(false);
-          setReady(true);
-        }, 10000);
-
-        const onLoad = () => {
-          clearTimeout(fallback);
-          setTimeout(() => { setLoading(false); setReady(true); }, 300);
-        };
+        const fallback = setTimeout(() => { setLoading(false); setReady(true); }, 10000);
+        const onLoad = () => { clearTimeout(fallback); setTimeout(() => { setLoading(false); setReady(true); }, 300); };
         iframe.addEventListener("load", onLoad, { once: true });
         return () => { clearTimeout(fallback); iframe.removeEventListener("load", onLoad); };
       }
-    } catch (e: any) {
-      setError(e.message || "Gagal memuat halaman");
-      setLoading(false);
-    }
+    } catch (e: any) { setError(e.message || "Gagal memuat halaman"); setLoading(false); }
   }, [url]);
 
   useEffect(() => { loadIframe(); }, [loadIframe]);
 
-  // ── Load card fallback via prefetch ─────────────────────────
+  // ── Load scan fallback ────────────────────────────────────
   const loadCards = useCallback(async () => {
-    if (scanResult) {
-      // Sudah ada data, cukup switch mode
-      setMode("cards");
-      return;
-    }
+    if (scanResult) { setMode("cards"); return; }
     setScanning(true);
     try {
       const res = await prefetchUrl(url);
       setScanResult(res);
-      if (res.elements?.length > 0) {
-        setActiveCategory(res.elements[0].category);
-      }
-    } catch (e: any) {
-      // silent
-    } finally {
-      setScanning(false);
-      setMode("cards");
-    }
+      if (res.elements?.length > 0) setActiveCategory(res.elements[0].category);
+    } catch {}
+    finally { setScanning(false); setMode("cards"); }
   }, [url, scanResult]);
 
-  // ── Card toggle ─────────────────────────────────────────────
-  const toggleCard = (el: PrefetchElement, globalIdx: string) => {
+  // ── AI Analyze ────────────────────────────────────────────
+  const handleAnalyzeAI = async () => {
+    if (!apiKey.trim()) { addToast("warn", "Masukkan API Key di topbar terlebih dahulu"); return; }
+    setAnalyzing(true); setShowAiPanel(true);
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, provider, apiKey, model }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || "Analisa gagal");
+      // Parse AI suggestions as recommendations
+      const recs: AiRec[] = (data.ai?.suggestions || []).map((s: string, i: number) => ({
+        label: s.length > 60 ? s.substring(0, 60) + "…" : s,
+        selector: data.ai?.css_selectors?.selectors?.[i] || "",
+        target: s,
+        fields: [],
+        reason: data.ai?.scraping_strategy || "",
+        priority: 10 - i,
+      }));
+      setAiRecs(recs);
+      addToast("success", `AI merekomendasikan ${recs.length} target scraping`);
+    } catch (e: any) {
+      addToast("error", e.message || "Analisa AI gagal");
+      setShowAiPanel(false);
+    } finally { setAnalyzing(false); }
+  };
+
+  const applyAiRec = (rec: AiRec) => {
+    const el: PickedElement = {
+      id: `ai_${Date.now()}`,
+      source: "ai",
+      category: "ai-recommendation",
+      label: rec.label,
+      selector: rec.selector,
+      itemType: null,
+      fields: rec.fields.map(f => ({ name: f, value: "", source: "ai" })),
+      rawFields: rec.fields,
+      preview: [rec.target],
+      count: 0,
+      target: rec.target,
+      priority: rec.priority,
+    };
+    setPicked(prev => {
+      if (prev.find(p => p.target === rec.target)) return prev.filter(p => p.target !== rec.target);
+      return [...prev, el];
+    });
+  };
+
+  // ── Card toggle ───────────────────────────────────────────
+  const toggleCard = (el: PrefetchElement, idx: string) => {
     setCheckedCards(prev => {
-      const next = { ...prev, [globalIdx]: !prev[globalIdx] };
-      // Build picked from checked cards
+      const next = { ...prev, [idx]: !prev[idx] };
       if (scanResult) {
-        const newPicked: PickedElement[] = scanResult.elements
-          .filter((_, i) => next[String(i)])
-          .map((e, i) => ({
-            id: `card_${i}_${Date.now()}`,
-            source: e.source || "dom",
-            category: e.category,
-            label: e.label,
-            selector: e.selector,
-            itemType: (e as any).itemType || null,
-            fields: e.fields || [],
-            rawFields: e.rawFields || [],
-            preview: e.preview || [],
-            count: e.count || 0,
-            target: e.target,
-            priority: e.priority || 0,
-          }));
-        setPicked(newPicked);
+        setPicked(
+          scanResult.elements
+            .filter((_, i) => next[String(i)])
+            .map((e, i) => ({
+              id: `card_${i}`, source: e.source || "dom", category: e.category,
+              label: e.label, selector: e.selector, itemType: (e as any).itemType || null,
+              fields: e.fields || [], rawFields: e.rawFields || [],
+              preview: e.preview || [], count: e.count || 0,
+              target: e.target, priority: e.priority || 0,
+            }))
+        );
       }
       return next;
     });
   };
 
-  // ── Apply ───────────────────────────────────────────────────
   const handleApply = () => { onApply(picked); onClose(); };
-  const removePicked = (id: string) => {
-    setPicked(prev => prev.filter(p => p.id !== id));
-    // Uncheck in card mode too
-    if (scanResult) {
-      const newChecked = { ...checkedCards };
-      scanResult.elements.forEach((e, i) => {
-        const found = picked.find(p => p.id === `card_${i}_${Date.now()}` || p.selector === e.selector);
-        if (found?.id === id) delete newChecked[String(i)];
-      });
-      setCheckedCards(newChecked);
-    }
-  };
+  const removePicked = (id: string) => setPicked(prev => prev.filter(p => p.id !== id));
 
-  // ── Grouped categories for card mode ───────────────────────
   const byCategory = scanResult
     ? (scanResult.categories || []).reduce((acc, cat) => {
         acc[cat] = (scanResult.elements || []).filter(e => e.category === cat);
@@ -196,145 +188,156 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
       }, {} as Record<string, PrefetchElement[]>)
     : {};
 
-  const filteredCatElements = (activeCategory && byCategory[activeCategory])
+  const filteredEls = (activeCategory && byCategory[activeCategory])
     ? byCategory[activeCategory].filter(el =>
-        !cardSearch ||
-        el.label.toLowerCase().includes(cardSearch) ||
-        el.selector.toLowerCase().includes(cardSearch) ||
-        (el.target || "").toLowerCase().includes(cardSearch)
+        !cardSearch || el.label.toLowerCase().includes(cardSearch) || el.selector.toLowerCase().includes(cardSearch)
       )
     : [];
 
-  // ────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────
   return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 9999,
-      background: "rgba(0,0,0,.92)", display: "flex", flexDirection: "column",
-      backdropFilter: "blur(8px)",
-    }}>
-      {/* ── Header ─────────────────────────────────────────── */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 12, padding: "10px 18px",
-        borderBottom: "1px solid var(--border2)", background: "var(--surface)", flexShrink: 0,
-      }}>
-        {/* Logo */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 30, height: 30, borderRadius: 8, background: "rgba(46,255,168,.1)", border: "1px solid rgba(46,255,168,.25)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <MousePointer2 size={14} style={{ color: "var(--neon)" }} />
+    <div style={{ position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,.88)",display:"flex",flexDirection:"column",backdropFilter:"blur(8px)" }}>
+
+      {/* ── BROWSER CHROME (top bar) ─────────────────────── */}
+      <div style={{ background:"#1c1f2e",borderBottom:"1px solid #2a2d3e",flexShrink:0,userSelect:"none" }}>
+
+        {/* Tab bar */}
+        <div style={{ display:"flex",alignItems:"center",gap:0,padding:"8px 12px 0",background:"#161824" }}>
+          {/* Traffic lights */}
+          <div style={{ display:"flex",gap:5,marginRight:10,alignItems:"center" }}>
+            <div style={{ width:12,height:12,borderRadius:"50%",background:"#ff5f57",border:"1px solid rgba(0,0,0,.2)" }} />
+            <div style={{ width:12,height:12,borderRadius:"50%",background:"#febc2e",border:"1px solid rgba(0,0,0,.2)" }} />
+            <div style={{ width:12,height:12,borderRadius:"50%",background:"#28c840",border:"1px solid rgba(0,0,0,.2)" }} />
           </div>
-          <div>
-            <div style={{ fontFamily: "var(--head)", fontSize: 13, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>Visual Element Picker</div>
-            <div style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--muted)", letterSpacing: ".5px" }}>KLIK ELEMEN UNTUK MEMILIH</div>
+          {/* Tab */}
+          <div style={{ display:"flex",alignItems:"center",gap:7,background:"#1c1f2e",borderRadius:"6px 6px 0 0",padding:"6px 14px 8px",maxWidth:240,border:"1px solid #2a2d3e",borderBottom:"1px solid #1c1f2e",position:"relative",bottom:-1 }}>
+            <Globe size={11} style={{ color:"#7880a0",flexShrink:0 }} />
+            <span style={{ fontFamily:"var(--body)",fontSize:11,color:"#c8dae8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1 }}>
+              {parsedUrl.hostname}
+            </span>
+            <button onClick={onClose} style={{ background:"none",border:"none",color:"#404660",cursor:"pointer",padding:0,marginLeft:4,display:"flex",flexShrink:0 }}>
+              <X size={10} />
+            </button>
           </div>
         </div>
 
-        {/* URL */}
-        <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", background: "rgba(0,0,0,.3)", padding: "4px 10px", borderRadius: 6, border: "1px solid var(--border)" }}>
-          <Globe size={9} style={{ display: "inline", marginRight: 5, opacity: .5 }} />
-          {url}
-        </span>
-
-        {/* Mode switcher */}
-        <div style={{ display: "flex", border: "1px solid var(--border2)", borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
-          <button
-            onClick={() => setMode("iframe")}
-            style={{ padding: "5px 12px", background: mode === "iframe" ? "rgba(46,255,168,.12)" : "transparent", border: "none", cursor: "pointer", color: mode === "iframe" ? "var(--neon)" : "var(--muted)", fontFamily: "var(--mono)", fontSize: 10, display: "flex", alignItems: "center", gap: 5, borderRight: "1px solid var(--border2)" }}
-          >
-            <Eye size={11} /> Live
-          </button>
-          <button
-            onClick={() => loadCards()}
-            style={{ padding: "5px 12px", background: mode === "cards" ? "rgba(46,255,168,.12)" : "transparent", border: "none", cursor: "pointer", color: mode === "cards" ? "var(--neon)" : "var(--muted)", fontFamily: "var(--mono)", fontSize: 10, display: "flex", alignItems: "center", gap: 5 }}
-          >
-            <LayoutGrid size={11} /> {scanning ? "..." : "Scan"}
-          </button>
-        </div>
-
-        {/* Status badges */}
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {layer > 0 && mode === "iframe" && (
-            <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--neon2)", background: "rgba(0,194,255,.07)", padding: "3px 8px", borderRadius: 5, border: "1px solid rgba(0,194,255,.2)", display: "flex", alignItems: "center", gap: 4 }}>
-              <Layers size={9} /> L{layer}
-            </span>
-          )}
-          {ready && mode === "iframe" && !loading && (
-            <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--neon)", background: "rgba(46,255,168,.07)", padding: "3px 8px", borderRadius: 5, border: "1px solid rgba(46,255,168,.2)", display: "flex", alignItems: "center", gap: 5 }}>
-              <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--neon)", flexShrink: 0 }} />
-              AKTIF
-            </span>
-          )}
-          <button
-            onClick={() => { setLoading(true); setError(""); setReady(false); loadIframe(); setMode("iframe"); }}
-            disabled={loading}
-            style={{ background: "transparent", border: "1px solid var(--border)", color: "var(--muted)", padding: "5px 8px", borderRadius: 6, cursor: "pointer", display: "flex" }}
-            title="Reload iframe"
-          >
-            <RefreshCw size={13} />
-          </button>
-          <button onClick={onClose} style={{ background: "rgba(255,69,96,.07)", border: "1px solid rgba(255,69,96,.2)", cursor: "pointer", color: "var(--danger)", padding: "5px 9px", borderRadius: 6, display: "flex" }}>
-            <X size={14} />
-          </button>
-        </div>
-      </div>
-
-      {/* ── Instruction bar ─────────────────────────────────── */}
-      <div style={{ padding: "5px 18px", background: "rgba(46,255,168,.02)", borderBottom: "1px solid var(--border)", flexShrink: 0, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-        {mode === "iframe" ? (
-          <>
-            {[["Hover","highlight elemen"],["Klik","pilih / batalkan"],["Selesai","kirim ke generator"]].map(([k,d]) => (
-              <span key={k} style={{ fontSize: 11, color: "var(--text2)", display: "flex", alignItems: "center", gap: 5 }}>
-                <kbd style={{ fontFamily: "var(--mono)", fontSize: 9, padding: "2px 6px", borderRadius: 4, background: "rgba(0,0,0,.4)", border: "1px solid var(--border2)", color: "var(--neon2)" }}>{k}</kbd>
-                <span style={{ color: "var(--muted)" }}>{d}</span>
-              </span>
+        {/* Address bar */}
+        <div style={{ display:"flex",alignItems:"center",gap:8,padding:"7px 14px 9px" }}>
+          {/* Nav buttons */}
+          <div style={{ display:"flex",gap:2 }}>
+            {[["←","back"],["→","fwd"],["↻","reload"]].map(([icon,title]) => (
+              <button key={title} title={title} style={{ background:"none",border:"none",color:"#404660",cursor:"not-allowed",padding:"3px 5px",borderRadius:4,fontSize:14,lineHeight:1 }}>
+                {icon}
+              </button>
             ))}
-            <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 9, color: "var(--muted)" }}>
-              overlay mode — menembus semua z-index
+          </div>
+
+          {/* URL bar */}
+          <div style={{ flex:1,display:"flex",alignItems:"center",gap:8,background:"rgba(0,0,0,.4)",border:"1px solid #2a2d3e",borderRadius:20,padding:"5px 14px",cursor:"default" }}>
+            <ShieldCheck size={11} style={{ color:"#2effa8",flexShrink:0 }} />
+            <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#7880a0",flexShrink:0 }}>{parsedUrl.origin}</span>
+            <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#c8dae8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1 }}>
+              {parsedUrl.pathname !== "/" ? parsedUrl.pathname : ""}
             </span>
-          </>
-        ) : (
-          <span style={{ fontSize: 11, color: "var(--text2)" }}>
-            <b>Mode Scan</b> — klik card elemen untuk pilih. Gunakan jika Live mode gagal.
-          </span>
-        )}
+            {layer > 0 && <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:"#00c2ff",background:"rgba(0,194,255,.07)",padding:"1px 7px",borderRadius:10,border:"1px solid rgba(0,194,255,.2)",flexShrink:0 }}>
+              bypass L{layer}
+            </span>}
+          </div>
+
+          {/* Right controls */}
+          <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+            {ready && !loading && mode === "iframe" && (
+              <div style={{ display:"flex",alignItems:"center",gap:5,padding:"3px 10px",borderRadius:20,background:"rgba(46,255,168,.07)",border:"1px solid rgba(46,255,168,.2)" }}>
+                <span style={{ width:5,height:5,borderRadius:"50%",background:"var(--neon)",flexShrink:0 }} />
+                <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:"var(--neon)" }}>PICKER AKTIF</span>
+              </div>
+            )}
+
+            {/* Mode switcher */}
+            <div style={{ display:"flex",border:"1px solid #2a2d3e",borderRadius:7,overflow:"hidden" }}>
+              <button onClick={() => setMode("iframe")}
+                style={{ padding:"4px 11px",background:mode==="iframe"?"rgba(46,255,168,.1)":"transparent",border:"none",cursor:"pointer",color:mode==="iframe"?"var(--neon)":"#7880a0",fontFamily:"'JetBrains Mono',monospace",fontSize:9,display:"flex",alignItems:"center",gap:4,borderRight:"1px solid #2a2d3e" }}>
+                <Eye size={10} /> Live
+              </button>
+              <button onClick={() => loadCards()}
+                style={{ padding:"4px 11px",background:mode==="cards"?"rgba(46,255,168,.1)":"transparent",border:"none",cursor:"pointer",color:mode==="cards"?"var(--neon)":"#7880a0",fontFamily:"'JetBrains Mono',monospace",fontSize:9,display:"flex",alignItems:"center",gap:4 }}>
+                <LayoutGrid size={10} /> {scanning ? "..." : "Scan"}
+              </button>
+            </div>
+
+            {/* AI Analyze */}
+            <button onClick={handleAnalyzeAI} disabled={analyzing}
+              style={{ display:"flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:7,background:analyzing?"rgba(129,140,248,.1)":"rgba(46,255,168,.08)",border:"1px solid rgba(46,255,168,.25)",cursor:analyzing?"not-allowed":"pointer",color:"var(--neon)",fontFamily:"'JetBrains Mono',monospace",fontSize:9,fontWeight:700 }}>
+              {analyzing ? <Loader2 size={10} style={{ animation:"spin .7s linear infinite" }} /> : <Sparkles size={10} />}
+              Analisis AI
+            </button>
+
+            <button onClick={() => { loadIframe(); setMode("iframe"); }} disabled={loading}
+              style={{ background:"none",border:"1px solid #2a2d3e",color:"#404660",padding:"5px 7px",borderRadius:6,cursor:"pointer",display:"flex" }}>
+              <RefreshCw size={12} />
+            </button>
+          </div>
+        </div>
+
+        {/* Instruction bar */}
+        <div style={{ padding:"4px 14px 7px",display:"flex",alignItems:"center",gap:14,borderTop:"1px solid rgba(255,255,255,.04)" }}>
+          {mode === "iframe" ? (
+            <>
+              {[["Hover","highlight"],["Klik","pilih/batalkan"],["Selesai (toolbar)","kirim ke generator"]].map(([k,d]) => (
+                <span key={k} style={{ fontSize:10,color:"#7880a0",display:"flex",alignItems:"center",gap:5 }}>
+                  <kbd style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:8,padding:"2px 6px",borderRadius:4,background:"rgba(0,0,0,.4)",border:"1px solid #2a2d3e",color:"#00c2ff" }}>{k}</kbd>
+                  <span style={{ color:"#404660" }}>{d}</span>
+                </span>
+              ))}
+              <span style={{ marginLeft:"auto",fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:"#404660" }}>
+                overlay mode · link dinonaktifkan · navigasi diblokir
+              </span>
+            </>
+          ) : (
+            <span style={{ fontSize:10,color:"#7880a0" }}>
+              <b style={{ color:"#c8dae8" }}>Scan Mode</b> — klik card elemen untuk pilih. 100% reliable fallback.
+            </span>
+          )}
+        </div>
       </div>
 
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        {/* ── Main area ─────────────────────────────────────── */}
-        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+      {/* ── MAIN CONTENT ────────────────────────────────── */}
+      <div style={{ display:"flex",flex:1,overflow:"hidden" }}>
 
-          {/* ─ IFRAME MODE ──────────────────────────────────── */}
+        {/* ─ Viewport ─────────────────────────────────── */}
+        <div style={{ flex:1,position:"relative",overflow:"hidden" }}>
+
+          {/* IFRAME MODE */}
           {mode === "iframe" && (
             <>
               {loading && (
-                <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, background: "var(--bg)", zIndex: 10 }}>
-                  <div style={{ position: "relative" }}>
+                <div style={{ position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14,background:"#06090f",zIndex:10 }}>
+                  <div style={{ position:"relative" }}>
                     <div className="spinner spinner-lg" />
-                    <Eye size={14} style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", color: "var(--neon)", opacity: .7 }} />
+                    <Eye size={14} style={{ position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",color:"var(--neon)",opacity:.7 }} />
                   </div>
-                  <div style={{ textAlign: "center" }}>
-                    <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--text)", marginBottom: 5 }}>Mengambil HTML + inject picker...</div>
-                    <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>bypass 6 layer · overlay trick aktif</div>
+                  <div style={{ textAlign:"center" }}>
+                    <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:"#c8dae8",marginBottom:4 }}>Fetching HTML + injecting picker...</div>
+                    <div style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"#404660" }}>6-layer bypass active · scripts stripped · links neutralized</div>
                   </div>
                 </div>
               )}
               {error && !loading && (
-                <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, background: "var(--bg)", zIndex: 10, padding: 32 }}>
-                  <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(255,184,48,.07)", border: "1px solid rgba(255,184,48,.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <AlertTriangle size={22} style={{ color: "var(--warn)" }} />
-                  </div>
-                  <div style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: 13, color: "var(--warn)", marginBottom: 8, fontWeight: 600 }}>{error}</div>
-                    <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.7 }}>
-                      Site ini memblokir akses server-side.<br />
-                      Gunakan <b style={{ color: "var(--text2)" }}>mode Scan</b> sebagai fallback yang 100% reliable.
+                <div style={{ position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14,background:"#06090f",zIndex:10,padding:32 }}>
+                  <AlertTriangle size={28} style={{ color:"var(--warn)" }} />
+                  <div style={{ textAlign:"center" }}>
+                    <div style={{ fontSize:13,color:"var(--warn)",marginBottom:6,fontWeight:600 }}>{error}</div>
+                    <div style={{ fontSize:11,color:"#7880a0",lineHeight:1.7 }}>
+                      Site memblokir server-side fetch.<br />
+                      Gunakan <b style={{ color:"#c8dae8" }}>Scan Mode</b> sebagai fallback 100% reliable.
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ display:"flex",gap:8 }}>
                     <button className="btn btn-secondary btn-sm" onClick={() => { setLoading(true); setError(""); loadIframe(); }}>
                       <RefreshCw size={12} /> Retry
                     </button>
                     <button className="btn btn-primary btn-sm" onClick={() => loadCards()}>
-                      <LayoutGrid size={12} /> Gunakan Scan Mode
+                      <LayoutGrid size={12} /> Scan Mode
                     </button>
                   </div>
                 </div>
@@ -342,121 +345,83 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
               <iframe
                 ref={iframeRef}
                 sandbox="allow-scripts allow-same-origin allow-forms"
-                style={{ width: "100%", height: "100%", border: "none", display: loading || error ? "none" : "block", background: "#fff" }}
+                style={{ width:"100%",height:"100%",border:"none",display:loading||error?"none":"block",background:"#fff" }}
                 title="visual-picker"
               />
             </>
           )}
 
-          {/* ─ CARD MODE (fallback) ──────────────────────────── */}
+          {/* SCAN MODE */}
           {mode === "cards" && (
-            <div style={{ display: "flex", height: "100%", background: "var(--bg)" }}>
+            <div style={{ display:"flex",height:"100%",background:"var(--bg)",overflow:"hidden" }}>
               {scanning ? (
-                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 14 }}>
+                <div style={{ flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12 }}>
                   <div className="spinner spinner-lg" />
-                  <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--text2)" }}>Scanning elemen...</span>
+                  <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:"#7880a0" }}>Scanning elemen HTML...</span>
                 </div>
               ) : !scanResult ? (
-                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 14 }}>
-                  <LayoutGrid size={36} style={{ color: "var(--muted)", opacity: .4 }} />
-                  <div style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 8 }}>Scan belum dijalankan</div>
-                    <button className="btn btn-primary btn-sm" onClick={() => loadCards()}>
-                      <Package size={13} /> Mulai Scan
-                    </button>
-                  </div>
+                <div style={{ flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12 }}>
+                  <Package size={32} style={{ color:"#404660",opacity:.5 }} />
+                  <button className="btn btn-primary btn-sm" onClick={() => loadCards()}>
+                    <Package size={13} /> Mulai Scan
+                  </button>
                 </div>
               ) : (
                 <>
-                  {/* Site info bar */}
-                  <div style={{ position: "absolute", top: 0, left: 0, right: 0, background: "rgba(0,0,0,.6)", backdropFilter: "blur(4px)", borderBottom: "1px solid var(--border)", padding: "8px 14px", display: "flex", gap: 10, alignItems: "center", zIndex: 5, flexWrap: "wrap" }}>
-                    <Globe size={11} style={{ color: "var(--muted)" }} />
-                    <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--neon2)" }}>{scanResult.host}</span>
-                    {scanResult.title && <span style={{ fontSize: 11, color: "var(--text2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{scanResult.title}</span>}
-                    <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", marginLeft: "auto" }}>{scanResult.elementCount} elemen · L{scanResult.layer}</span>
+                  {/* Site info */}
+                  <div style={{ position:"absolute",top:0,left:0,right:0,background:"rgba(6,9,15,.85)",backdropFilter:"blur(4px)",borderBottom:"1px solid #1a1e30",padding:"6px 14px",display:"flex",gap:10,alignItems:"center",zIndex:5,flexWrap:"wrap" }}>
+                    <Globe size={10} style={{ color:"#404660" }} />
+                    <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"#00c2ff" }}>{scanResult.host}</span>
+                    {scanResult.siteType && <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:"var(--neon)",background:"rgba(46,255,168,.07)",padding:"1px 7px",borderRadius:10,border:"1px solid rgba(46,255,168,.2)" }}>{scanResult.siteType}</span>}
+                    {scanResult.title && <span style={{ fontSize:11,color:"#7880a0",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:220 }}>{scanResult.title}</span>}
+                    <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:"#404660",marginLeft:"auto" }}>{scanResult.elementCount} elemen · L{scanResult.layer}</span>
                   </div>
 
-                  {/* Category sidebar */}
-                  <div style={{ width: 160, flexShrink: 0, borderRight: "1px solid var(--border)", paddingTop: 52, overflowY: "auto", background: "var(--surface)" }}>
-                    <div style={{ padding: "8px 8px 4px", fontFamily: "var(--mono)", fontSize: 8, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 2 }}>Kategori</div>
+                  {/* Categories */}
+                  <div style={{ width:155,flexShrink:0,borderRight:"1px solid #1a1e30",paddingTop:44,overflowY:"auto",background:"#0b0d14" }}>
                     {Object.keys(byCategory).map(cat => {
                       const items = byCategory[cat];
-                      const nChecked = items.filter((el) => {
-                        const gi = scanResult.elements.indexOf(el);
-                        return checkedCards[String(gi)];
-                      }).length;
+                      const nc = items.filter((_,i) => checkedCards[String(scanResult.elements.indexOf(items[i]))]).length;
                       return (
-                        <button key={cat} onClick={() => setActiveCategory(cat)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 10px", borderRadius: 0, background: activeCategory === cat ? "rgba(46,255,168,.07)" : "transparent", borderLeft: activeCategory === cat ? "2px solid var(--neon)" : "2px solid transparent", cursor: "pointer", textAlign: "left", width: "100%", border: "none", borderLeft: activeCategory === cat ? "2px solid var(--neon)" : "2px solid transparent" }}>
-                          <span style={{ fontSize: 12 }}>{CAT_ICON[cat] || "📋"}</span>
-                          <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: activeCategory === cat ? "var(--neon)" : "var(--text2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat}</span>
-                          <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: nChecked > 0 ? "var(--neon)" : "var(--muted)" }}>
-                            {nChecked > 0 ? `${nChecked}/` : ""}{items.length}
+                        <button key={cat} onClick={() => setActiveCategory(cat)} style={{ display:"flex",alignItems:"center",gap:7,padding:"7px 10px",background:activeCategory===cat?"rgba(46,255,168,.06)":"transparent",borderLeft:activeCategory===cat?"2px solid var(--neon)":"2px solid transparent",cursor:"pointer",textAlign:"left",width:"100%",border:"none",borderLeft:activeCategory===cat?"2px solid var(--neon)":"2px solid transparent" }}>
+                          <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:activeCategory===cat?"var(--neon)":"#7880a0",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{cat}</span>
+                          <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:nc>0?"var(--neon)":"#404660" }}>
+                            {nc>0?`${nc}/`:""}{items.length}
                           </span>
                         </button>
                       );
                     })}
                   </div>
 
-                  {/* Elements list */}
-                  <div style={{ flex: 1, paddingTop: 52, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                    {/* Search */}
-                    <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(0,0,0,.3)", border: "1px solid var(--border2)", borderRadius: 7, padding: "6px 10px" }}>
-                        <Search size={11} style={{ color: "var(--muted)", flexShrink: 0 }} />
-                        <input
-                          value={cardSearch}
-                          onChange={e => setCardSearch(e.target.value.toLowerCase())}
-                          placeholder="Filter elemen..."
-                          style={{ background: "none", border: "none", outline: "none", color: "var(--text)", fontFamily: "var(--mono)", fontSize: 11, flex: 1 }}
-                        />
+                  {/* Elements */}
+                  <div style={{ flex:1,paddingTop:44,overflow:"hidden",display:"flex",flexDirection:"column" }}>
+                    <div style={{ padding:"7px 12px",borderBottom:"1px solid #1a1e30",flexShrink:0 }}>
+                      <div style={{ display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.3)",border:"1px solid #1a1e30",borderRadius:7,padding:"5px 10px" }}>
+                        <Search size={10} style={{ color:"#404660" }} />
+                        <input value={cardSearch} onChange={e=>setCardSearch(e.target.value.toLowerCase())} placeholder="Filter..." style={{ background:"none",border:"none",outline:"none",color:"#c8dae8",fontFamily:"'JetBrains Mono',monospace",fontSize:10,flex:1 }} />
                       </div>
                     </div>
-
-                    <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
-                      {filteredCatElements.length === 0 ? (
-                        <div style={{ color: "var(--muted)", fontSize: 12, padding: 20, textAlign: "center" }}>
-                          {activeCategory ? "Tidak ada elemen" : "Pilih kategori di kiri"}
-                        </div>
-                      ) : filteredCatElements.map((el) => {
-                        const globalIdx = String(scanResult.elements.indexOf(el));
-                        const isChecked = !!checkedCards[globalIdx];
+                    <div style={{ flex:1,overflowY:"auto",padding:"10px 12px",display:"flex",flexDirection:"column",gap:6 }}>
+                      {filteredEls.map(el => {
+                        const gi = String(scanResult.elements.indexOf(el));
+                        const isCk = !!checkedCards[gi];
                         return (
-                          <div
-                            key={globalIdx}
-                            onClick={() => toggleCard(el, globalIdx)}
-                            style={{
-                              display: "flex", gap: 10, alignItems: "flex-start",
-                              padding: "10px 12px", borderRadius: 9, cursor: "pointer",
-                              background: isChecked ? "rgba(46,255,168,.06)" : "rgba(0,0,0,.3)",
-                              border: `1px solid ${isChecked ? "rgba(46,255,168,.3)" : "var(--border)"}`,
-                              transition: "all .15s",
-                            }}
-                          >
-                            <div style={{ width: 15, height: 15, borderRadius: 4, border: `2px solid ${isChecked ? "var(--neon)" : "var(--border2)"}`, background: isChecked ? "var(--neon)" : "transparent", flexShrink: 0, marginTop: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                              {isChecked && <span style={{ color: "#000", fontSize: 9, fontWeight: 700 }}>✓</span>}
+                          <div key={gi} onClick={() => toggleCard(el, gi)}
+                            style={{ display:"flex",gap:9,alignItems:"flex-start",padding:"9px 11px",borderRadius:9,cursor:"pointer",background:isCk?"rgba(46,255,168,.05)":"rgba(0,0,0,.3)",border:`1px solid ${isCk?"rgba(46,255,168,.3)":"#1a1e30"}`,transition:"all .15s" }}>
+                            <div style={{ width:14,height:14,borderRadius:3,border:`2px solid ${isCk?"var(--neon)":"#2a2d3e"}`,background:isCk?"var(--neon)":"transparent",flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center" }}>
+                              {isCk && <span style={{ color:"#000",fontSize:8,fontWeight:700 }}>✓</span>}
                             </div>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4, flexWrap: "wrap" }}>
-                                <span style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600, color: isChecked ? "var(--neon)" : "var(--text)" }}>{el.label}</span>
-                                <code style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--muted)", background: "rgba(0,0,0,.4)", padding: "1px 6px", borderRadius: 3 }}>
-                                  {el.selector.length > 28 ? el.selector.substring(0, 28) + "…" : el.selector}
+                            <div style={{ flex:1,minWidth:0 }}>
+                              <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:3 }}>
+                                <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,fontWeight:600,color:isCk?"var(--neon)":"#c8dae8" }}>{el.label}</span>
+                                <code style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:8,color:"#404660",background:"rgba(0,0,0,.4)",padding:"1px 5px",borderRadius:3 }}>
+                                  {el.selector.length>26?el.selector.substring(0,26)+"…":el.selector}
                                 </code>
-                                <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--neon)", marginLeft: "auto" }}>{el.count}×</span>
+                                <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:"var(--neon)",marginLeft:"auto" }}>{el.count}×</span>
                               </div>
-                              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                                {(el.preview || []).slice(0, 2).map((p, pi) => (
-                                  <div key={pi} style={{ fontSize: 10.5, color: "var(--text2)", fontFamily: "var(--mono)", lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingLeft: 6, borderLeft: "2px solid var(--border2)" }}>
-                                    {p}
-                                  </div>
-                                ))}
-                              </div>
-                              {(el.rawFields || []).length > 0 && (
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 5 }}>
-                                  {(el.rawFields || []).slice(0, 5).map((f: string) => (
-                                    <span key={f} style={{ fontFamily: "var(--mono)", fontSize: 8, padding: "2px 5px", borderRadius: 3, background: "rgba(0,0,0,.4)", border: "1px solid var(--border2)", color: "var(--text2)" }}>{f}</span>
-                                  ))}
-                                </div>
-                              )}
+                              {(el.preview||[]).slice(0,2).map((p,pi) => (
+                                <div key={pi} style={{ fontSize:10,color:"#7880a0",fontFamily:"'JetBrains Mono',monospace",lineHeight:1.4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingLeft:5,borderLeft:"2px solid #1a1e30" }}>{p}</div>
+                              ))}
                             </div>
                           </div>
                         );
@@ -469,57 +434,88 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
           )}
         </div>
 
-        {/* ── Right panel: selected elements ─────────────────── */}
-        <div style={{ width: 270, flexShrink: 0, borderLeft: "1px solid var(--border2)", background: "var(--surface)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {/* Header */}
-          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 7 }}>
-            <CheckSquare size={11} style={{ color: "var(--neon)" }} />
-            <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text2)", textTransform: "uppercase", letterSpacing: 1 }}>Dipilih</span>
+        {/* ── RIGHT PANEL ─────────────────────────────── */}
+        <div style={{ width:280,flexShrink:0,borderLeft:"1px solid #1a1e30",background:"#0b0d14",display:"flex",flexDirection:"column",overflow:"hidden" }}>
+
+          {/* AI Panel */}
+          {showAiPanel && (
+            <div style={{ borderBottom:"1px solid #1a1e30",flexShrink:0 }}>
+              <div style={{ padding:"8px 12px",display:"flex",alignItems:"center",gap:7,background:"rgba(129,140,248,.05)",borderBottom:"1px solid rgba(129,140,248,.1)" }}>
+                <Sparkles size={11} style={{ color:"var(--neon3)" }} />
+                <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:"var(--neon3)",textTransform:"uppercase",letterSpacing:1 }}>AI Recommendations</span>
+                <button onClick={()=>setShowAiPanel(false)} style={{ marginLeft:"auto",background:"none",border:"none",color:"#404660",cursor:"pointer",padding:2 }}><X size={10}/></button>
+              </div>
+              {analyzing ? (
+                <div style={{ padding:"16px",display:"flex",alignItems:"center",gap:8,justifyContent:"center" }}>
+                  <Loader2 size={14} style={{ color:"var(--neon3)",animation:"spin .7s linear infinite" }} />
+                  <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"#7880a0" }}>Menganalisa...</span>
+                </div>
+              ) : aiRecs && (
+                <div style={{ maxHeight:200,overflowY:"auto",padding:"6px 10px",display:"flex",flexDirection:"column",gap:5 }}>
+                  {aiRecs.map((rec, i) => {
+                    const isChosen = picked.some(p => p.target === rec.target);
+                    return (
+                      <div key={i} onClick={() => applyAiRec(rec)}
+                        style={{ padding:"7px 10px",borderRadius:7,cursor:"pointer",background:isChosen?"rgba(46,255,168,.07)":"rgba(0,0,0,.3)",border:`1px solid ${isChosen?"rgba(46,255,168,.3)":"#1a1e30"}`,transition:"all .15s" }}>
+                        <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+                          <div style={{ width:12,height:12,borderRadius:3,border:`2px solid ${isChosen?"var(--neon)":"#2a2d3e"}`,background:isChosen?"var(--neon)":"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center" }}>
+                            {isChosen && <span style={{ color:"#000",fontSize:7,fontWeight:700 }}>✓</span>}
+                          </div>
+                          <span style={{ fontSize:11,color:isChosen?"var(--neon)":"#c8dae8",flex:1,lineHeight:1.4 }}>{rec.label}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Selected elements header */}
+          <div style={{ padding:"9px 12px",borderBottom:"1px solid #1a1e30",display:"flex",alignItems:"center",gap:7,flexShrink:0 }}>
+            <CheckSquare size={11} style={{ color:"var(--neon)" }} />
+            <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,color:"#7880a0",textTransform:"uppercase",letterSpacing:1 }}>Dipilih</span>
             {picked.length > 0 && (
-              <span style={{ fontFamily: "var(--mono)", fontSize: 9, padding: "1px 7px", borderRadius: 10, background: "rgba(46,255,168,.12)", border: "1px solid rgba(46,255,168,.25)", color: "var(--neon)" }}>
+              <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9,padding:"1px 7px",borderRadius:10,background:"rgba(46,255,168,.1)",border:"1px solid rgba(46,255,168,.2)",color:"var(--neon)" }}>
                 {picked.length}
               </span>
             )}
             {picked.length > 0 && (
-              <button onClick={() => { setPicked([]); setCheckedCards({}); }} style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 10, fontFamily: "var(--mono)" }}>
+              <button onClick={() => { setPicked([]); setCheckedCards({}); }} style={{ marginLeft:"auto",background:"none",border:"none",color:"#404660",cursor:"pointer",fontSize:9,fontFamily:"'JetBrains Mono',monospace" }}>
                 clear
               </button>
             )}
           </div>
 
-          {/* Elements */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+          {/* Selected list */}
+          <div style={{ flex:1,overflowY:"auto",padding:"7px 9px",display:"flex",flexDirection:"column",gap:5 }}>
             {picked.length === 0 ? (
-              <div style={{ padding: "24px 12px", textAlign: "center" }}>
-                <MousePointer2 size={26} style={{ color: "var(--muted)", opacity: .35, marginBottom: 10 }} />
-                <p style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.7 }}>
-                  {mode === "iframe"
-                    ? "Klik elemen di halaman kiri."
-                    : "Klik card elemen di tengah."}
-                  <br />Selector otomatis ter-generate.
+              <div style={{ padding:"24px 12px",textAlign:"center" }}>
+                <MousePointer2 size={24} style={{ color:"#2a2d3e",marginBottom:10 }} />
+                <p style={{ fontSize:10,color:"#404660",lineHeight:1.7,fontFamily:"'JetBrains Mono',monospace" }}>
+                  {mode==="iframe"?"Klik elemen di halaman.":"Klik card di tengah."}<br />
+                  Atau gunakan AI Recommendations.
                 </p>
               </div>
-            ) : picked.map((el) => {
+            ) : picked.map(el => {
               const color = SRC_CLR[el.source] || "var(--neon)";
               return (
-                <div key={el.id} style={{ background: "rgba(46,255,168,.04)", border: "1px solid rgba(46,255,168,.18)", borderRadius: 9, padding: "9px 11px", position: "relative" }}>
-                  <button onClick={() => removePicked(el.id)} style={{ position: "absolute", top: 7, right: 7, background: "none", border: "none", cursor: "pointer", color: "var(--muted)", padding: 2, lineHeight: 1 }}>
-                    <X size={10} />
-                  </button>
-                  <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 5, flexWrap: "wrap", paddingRight: 16 }}>
-                    <span style={{ fontFamily: "var(--mono)", fontSize: 8, padding: "2px 6px", borderRadius: 4, background: "rgba(0,0,0,.35)", color, textTransform: "uppercase", letterSpacing: ".5px" }}>{el.source}</span>
-                    <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--neon)", fontWeight: 700 }}>{el.count}×</span>
-                    {el.itemType && <span style={{ fontFamily: "var(--mono)", fontSize: 8, color: "var(--neon3)", padding: "2px 5px", borderRadius: 4, background: "rgba(176,111,255,.08)", border: "1px solid rgba(176,111,255,.2)" }}>{el.itemType}</span>}
+                <div key={el.id} style={{ background:"rgba(46,255,168,.03)",border:"1px solid rgba(46,255,168,.15)",borderRadius:8,padding:"8px 10px",position:"relative" }}>
+                  <button onClick={() => removePicked(el.id)} style={{ position:"absolute",top:6,right:6,background:"none",border:"none",cursor:"pointer",color:"#404660",padding:2,lineHeight:1 }}><X size={9}/></button>
+                  <div style={{ display:"flex",alignItems:"center",gap:5,marginBottom:4,paddingRight:14,flexWrap:"wrap" }}>
+                    <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:8,padding:"2px 6px",borderRadius:4,background:"rgba(0,0,0,.4)",color,textTransform:"uppercase",letterSpacing:".5px" }}>{el.source}</span>
+                    {el.count > 0 && <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:10,color:"var(--neon)",fontWeight:700 }}>{el.count}×</span>}
+                    {el.itemType && <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:8,color:"var(--neon3)",padding:"2px 5px",borderRadius:4,background:"rgba(176,111,255,.08)",border:"1px solid rgba(176,111,255,.2)" }}>{el.itemType}</span>}
                   </div>
-                  <code style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text)", display: "block", marginBottom: 5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", background: "rgba(0,0,0,.35)", padding: "3px 7px", borderRadius: 5, border: "1px solid var(--border)" }}>
-                    {el.selector}
+                  <code style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:9.5,color:"#c8dae8",display:"block",marginBottom:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",background:"rgba(0,0,0,.4)",padding:"3px 7px",borderRadius:5,border:"1px solid #1a1e30" }}>
+                    {el.selector || el.target.substring(0,40)}
                   </code>
                   {el.rawFields.length > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                      {el.rawFields.slice(0, 5).map((f: string) => (
-                        <span key={f} style={{ fontFamily: "var(--mono)", fontSize: 8, padding: "2px 5px", borderRadius: 3, background: "rgba(0,0,0,.4)", border: "1px solid var(--border2)", color: "var(--text2)" }}>{f}</span>
+                    <div style={{ display:"flex",flexWrap:"wrap",gap:3 }}>
+                      {el.rawFields.slice(0,5).map(f => (
+                        <span key={f} style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:8,padding:"1px 5px",borderRadius:3,background:"rgba(0,0,0,.4)",border:"1px solid #1a1e30",color:"#7880a0" }}>{f}</span>
                       ))}
-                      {el.rawFields.length > 5 && <span style={{ fontFamily: "var(--mono)", fontSize: 8, color: "var(--muted)", padding: "2px 4px" }}>+{el.rawFields.length - 5}</span>}
+                      {el.rawFields.length > 5 && <span style={{ fontFamily:"'JetBrains Mono',monospace",fontSize:8,color:"#404660" }}>+{el.rawFields.length-5}</span>}
                     </div>
                   )}
                 </div>
@@ -527,12 +523,12 @@ export function VisualPickerModal({ url, onClose, onApply }: Props) {
             })}
           </div>
 
-          {/* Apply */}
-          <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border)", flexShrink: 0, display: "flex", flexDirection: "column", gap: 7 }}>
-            <button className="btn btn-primary" style={{ width: "100%" }} disabled={picked.length === 0} onClick={handleApply}>
+          {/* Apply button */}
+          <div style={{ padding:"11px 12px",borderTop:"1px solid #1a1e30",flexShrink:0,display:"flex",flexDirection:"column",gap:6 }}>
+            <button className="btn btn-primary" style={{ width:"100%" }} disabled={picked.length===0} onClick={handleApply}>
               <Zap size={14} /> Pakai {picked.length} Elemen
             </button>
-            <button className="btn btn-secondary btn-sm" style={{ width: "100%" }} onClick={onClose}>Batal</button>
+            <button className="btn btn-secondary btn-sm" style={{ width:"100%" }} onClick={onClose}>Batal</button>
           </div>
         </div>
       </div>
